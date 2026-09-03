@@ -2,22 +2,28 @@ import os
 import json
 import random
 import re
+import threading
 from io import BytesIO
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from http.server import BaseHTTPRequestHandler, HTTPServer
 
 import requests
 from dotenv import load_dotenv
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+)
+
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
     CallbackQueryHandler,
-    MessageHandler,
     ContextTypes,
-    filters,
 )
+
 
 # =========================================================
 # CONFIG
@@ -28,13 +34,15 @@ load_dotenv()
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 PEXELS_API_KEY = os.getenv("PEXELS_API_KEY")
 
-CHANNEL = os.getenv("CHANNEL", "@songsandscars")
-MUSIC_FOLDER = os.getenv("MUSIC_FOLDER", "music")
-STATE_FILE = os.getenv("STATE_FILE", "state.json")
-TIMEZONE = os.getenv("TIMEZONE", "Asia/Tehran")
+CHANNEL = "@songsandscars"
+
+MUSIC_FOLDER = "music"
+STATE_FILE = "state.json"
+
+TIMEZONE = "Asia/Tehran"
+
 SIGNATURE = "\n\n— silent ruins 🥀"
 
-os.makedirs(MUSIC_FOLDER, exist_ok=True)
 
 # =========================================================
 # ADMIN IDS
@@ -44,14 +52,17 @@ ADMIN_IDS = set()
 
 for value in os.getenv("ADMIN_IDS", "").split(","):
     value = value.strip()
+
     if value.isdigit():
         ADMIN_IDS.add(int(value))
+
 
 # =========================================================
 # THEMES
 # =========================================================
 
 THEMES = {
+
     "midnight": {
         "emojis": ["🌑", "🌙", "🕯️", "🖤"],
         "queries": [
@@ -59,7 +70,7 @@ THEMES = {
             "lonely night city cinematic",
             "dark bedroom window night",
             "midnight rain film photography",
-            "lonely silhouette night",
+            "lonely silhouette night"
         ],
         "texts": [
             "2:17 AM.\neveryone is asleep.\nmy mind isn't. 🌑",
@@ -67,8 +78,10 @@ THEMES = {
             "some nights are too quiet\nto hide from yourself. 🕯️",
             "at night,\neverything you buried learns how to speak. 🖤",
             "it's always louder after midnight.\nthe memories.\nthe silence.\nme. 🌑",
-        ],
+            "another night.\nanother conversation with the thoughts i can't escape. 🌙"
+        ]
     },
+
     "rain": {
         "emojis": ["🌧️", "☔", "🥀", "🖤"],
         "queries": [
@@ -76,7 +89,7 @@ THEMES = {
             "rainy night street film photography",
             "person under rain dark aesthetic",
             "rain window lonely night",
-            "city rain cinematic night",
+            "city rain cinematic night"
         ],
         "texts": [
             "some nights,\nyou don't need someone.\nyou just need the rain to be louder. 🌧️",
@@ -84,8 +97,10 @@ THEMES = {
             "i like rainy nights.\nthey make loneliness look beautiful. 🥀",
             "maybe that's why i love the rain.\nit knows how to fall apart quietly. 🌧️",
             "some memories sound like rain\nhitting a window at 3 AM. 🖤",
-        ],
+            "i watched the rain\nand remembered everything i was trying to forget. 🌧️"
+        ]
     },
+
     "cigarette": {
         "emojis": ["🚬", "🖤", "🌑", "🥀"],
         "queries": [
@@ -93,7 +108,7 @@ THEMES = {
             "smoking alone night photography",
             "cigarette dark portrait film",
             "lonely smoker rainy night",
-            "smoking silhouette night",
+            "smoking silhouette night"
         ],
         "texts": [
             "one cigarette.\none memory.\nwhole night gone. 🚬",
@@ -101,8 +116,10 @@ THEMES = {
             "i don't smoke to forget.\ni smoke because remembering got heavy. 🚬",
             "the room was quiet.\nthe cigarette wasn't. 🌑",
             "smoke disappears faster than people do. 🥀",
-        ],
+            "some nights taste like smoke\nand things left unsaid. 🚬"
+        ]
     },
+
     "night_drive": {
         "emojis": ["🚘", "🌃", "🌑", "🎧"],
         "queries": [
@@ -110,7 +127,7 @@ THEMES = {
             "car driving night rain film",
             "empty highway night cinematic",
             "city lights car night",
-            "night road lonely photography",
+            "night road lonely photography"
         ],
         "texts": [
             "sometimes you don't need a destination.\nyou just need to keep driving. 🚘",
@@ -118,8 +135,10 @@ THEMES = {
             "late night drives fix things\nthat conversations can't. 🎧",
             "no calls.\nno messages.\njust music and headlights. 🌑",
             "i drove until the city disappeared\nand my thoughts finally got quiet. 🚘",
-        ],
+            "some roads only exist\nwhen you're trying to outrun yourself. 🖤"
+        ]
     },
+
     "neon_city": {
         "emojis": ["🌃", "💜", "🖤", "🌑"],
         "queries": [
@@ -127,7 +146,7 @@ THEMES = {
             "dark cyberpunk street photography",
             "neon lights rainy street",
             "lonely city night cinematic",
-            "urban night neon film",
+            "urban night neon film"
         ],
         "texts": [
             "millions of lights.\nstill somehow lonely. 🌃",
@@ -135,8 +154,10 @@ THEMES = {
             "everyone was somewhere.\ni was nowhere. 🌑",
             "neon lights.\nempty streets.\nthe same old thoughts. 💜",
             "the city never sleeps.\nsome people just become better at hiding. 🌃",
-        ],
+            "surrounded by thousands of faces.\nstill looking for one. 🖤"
+        ]
     },
+
     "empty_room": {
         "emojis": ["🕯️", "🪟", "🖤", "🥀"],
         "queries": [
@@ -144,7 +165,7 @@ THEMES = {
             "lonely bedroom night photography",
             "dark room chair window rain",
             "empty room moody film photography",
-            "lonely room lamp night",
+            "lonely room lamp night"
         ],
         "texts": [
             "the room is empty.\nthe memories aren't. 🕯️",
@@ -152,8 +173,10 @@ THEMES = {
             "silence feels different\nwhen nobody is coming back. 🖤",
             "i left the room.\nsomehow the memories followed. 🥀",
             "an empty room can still feel crowded\nwith everything you lost. 🕯️",
-        ],
+            "nothing changed in the room.\neverything changed in me. 🪟"
+        ]
     },
+
     "moon": {
         "emojis": ["🌙", "🌌", "🖤", "✨"],
         "queries": [
@@ -161,7 +184,7 @@ THEMES = {
             "lonely person under moonlight",
             "moon clouds dark photography",
             "night sky lonely aesthetic",
-            "silhouette moon cinematic",
+            "silhouette moon cinematic"
         ],
         "texts": [
             "the moon has seen every version of me. 🌙",
@@ -169,8 +192,10 @@ THEMES = {
             "maybe loneliness isn't empty.\nmaybe it's just quiet. 🌙",
             "the moon stays.\npeople don't. 🖤",
             "same moon.\ndifferent life.\ndifferent me. ✨",
-        ],
+            "i looked at the sky\nand wondered who was looking at the same moon. 🌙"
+        ]
     },
+
     "breakup": {
         "emojis": ["🥀", "🩶", "🖤", "💔"],
         "queries": [
@@ -178,7 +203,7 @@ THEMES = {
             "sad couple silhouette night",
             "lost love dark cinematic",
             "person alone after breakup",
-            "goodbye couple rainy night",
+            "goodbye couple rainy night"
         ],
         "texts": [
             "the worst part wasn't losing you.\nit was losing myself trying to keep you. 🥀",
@@ -186,8 +211,10 @@ THEMES = {
             "i still remember.\ni just stopped going back. 🖤",
             "some goodbyes happen\nlong before people actually leave. 💔",
             "you were a beautiful mistake\ni'm glad i survived. 🥀",
-        ],
+            "i loved you.\nthen i learned how to love myself more. 🖤"
+        ]
     },
+
     "nostalgia": {
         "emojis": ["📼", "🕯️", "🥀", "🌙"],
         "queries": [
@@ -195,7 +222,7 @@ THEMES = {
             "old street rainy night vintage",
             "nostalgic childhood film aesthetic",
             "old room nostalgia photography",
-            "vintage night city",
+            "vintage night city"
         ],
         "texts": [
             "we didn't know those were the good days.\nwe just thought they were normal. 🕯️",
@@ -203,8 +230,10 @@ THEMES = {
             "i miss the version of me\nthat didn't know how things end. 🥀",
             "some memories don't hurt.\nthey just refuse to leave. 🌙",
             "the past never knocks.\nit just walks in when a song starts. 📼",
-        ],
+            "i don't miss yesterday.\ni miss who i was in it. 🖤"
+        ]
     },
+
     "lonely_street": {
         "emojis": ["🚶", "🌑", "🖤", "🌃"],
         "queries": [
@@ -212,7 +241,7 @@ THEMES = {
             "walking alone city night",
             "empty street dark film photography",
             "alone man street night",
-            "lonely silhouette urban night",
+            "lonely silhouette urban night"
         ],
         "texts": [
             "i learned how to walk alone\nwithout looking back. 🚶",
@@ -220,8 +249,10 @@ THEMES = {
             "the loneliest walks\nare the ones nobody knows about. 🖤",
             "i kept walking.\nnot because i knew where i was going.\nbecause stopping hurt more. 🚶",
             "empty streets understand people better than crowded rooms. 🌃",
-        ],
+            "sometimes getting lost\nis the only way to find yourself. 🖤"
+        ]
     },
+
     "cold": {
         "emojis": ["🩶", "❄️", "🖤", "⛓️"],
         "queries": [
@@ -229,16 +260,18 @@ THEMES = {
             "black white lonely man photography",
             "cold city night film",
             "hooded man dark street",
-            "winter lonely cinematic",
+            "winter lonely cinematic"
         ],
         "texts": [
             "i don't have trust issues.\ni have memories. 🩶",
             "i became colder\nwhen being soft kept costing me. ❄️",
             "no anger.\nno revenge.\njust distance. ⛓️",
             "i remember who stayed.\ni remember who disappeared. 🖤",
-            "i got harder to reach\nbecause i got tired of being easy to hurt. ⛓️",
-        ],
+            "i don't hate people.\ni just know what they're capable of. 🩶",
+            "i got harder to reach\nbecause i got tired of being easy to hurt. ⛓️"
+        ]
     },
+
     "ocean_fog": {
         "emojis": ["🌊", "🌫️", "🖤", "🌙"],
         "queries": [
@@ -246,7 +279,7 @@ THEMES = {
             "lonely ocean night photography",
             "foggy sea dark aesthetic",
             "person ocean night cinematic",
-            "dark beach lonely film",
+            "dark beach lonely film"
         ],
         "texts": [
             "some feelings are like the ocean.\nyou can see them.\nyou just can't measure them. 🌊",
@@ -254,8 +287,10 @@ THEMES = {
             "i stood by the ocean\nand let it keep my secrets. 🖤",
             "there's something honest about the sea.\nit never pretends to be calm. 🌊",
             "maybe i needed the horizon\nbecause everything behind me hurt. 🌙",
-        ],
+            "the ocean was loud enough\nto hide every word i couldn't say. 🌊"
+        ]
     },
+
     "dark_romance": {
         "emojis": ["🥀", "🖤", "🕯️", "🌹"],
         "queries": [
@@ -263,7 +298,7 @@ THEMES = {
             "romantic shadows film photography",
             "dark couple silhouette night",
             "moody romantic photography",
-            "couple candlelight dark aesthetic",
+            "couple candlelight dark aesthetic"
         ],
         "texts": [
             "i wanted forever.\nyou wanted something temporary. 🥀",
@@ -271,12 +306,14 @@ THEMES = {
             "loving you was easy.\nforgetting you wasn't. 🌹",
             "you were my favorite place\nto get lost. 🕯️",
             "we looked beautiful together.\nthat doesn't mean we belonged together. 🥀",
-        ],
-    },
+            "some love stories end.\nsome just stop being spoken about. 🖤"
+        ]
+    }
 }
 
+
 # =========================================================
-# KNOWN SONGS / THEME MATCHING
+# SONG DATABASE
 # =========================================================
 
 SONGS = {
@@ -285,32 +322,32 @@ SONGS = {
     "Lorde - Writer in the Dark": ["breakup", "midnight", "dark_romance"],
     "Hozier - Unknown / Nth": ["breakup", "dark_romance", "cold"],
     "The Weeknd - Echoes of Silence": ["midnight", "empty_room", "breakup"],
-    "Hozier - Cherry Wine (Live)": ["dark_romance", "nostalgia", "breakup"],
+    "Hozier - Cherry Wine (Live)": ["dark_romance", "nostalgia"],
     "Hozier - Work Song": ["dark_romance", "nostalgia"],
     "Coldplay - Sparks": ["nostalgia", "dark_romance", "midnight"],
-    "Lorde - Liability": ["lonely_street", "empty_room", "breakup"],
+    "Lorde - Liability": ["lonely_street", "empty_room"],
     "Bon Iver & St. Vincent - Roslyn": ["ocean_fog", "nostalgia", "midnight"],
     "The Cinematic Orchestra - To Build a Home": ["empty_room", "nostalgia", "dark_romance"],
     "Ludovico Einaudi - Nuvole Bianche": ["rain", "midnight", "ocean_fog"],
     "Cigarettes After Sex - Heavenly": ["dark_romance", "midnight", "nostalgia"],
     "Cigarettes After Sex - Sweet": ["dark_romance", "nostalgia"],
-    "Daughter - Medicine": ["breakup", "rain", "midnight"],
-    "Daughter - Smother": ["breakup", "empty_room", "dark_romance"],
-    "Daughter - Youth": ["nostalgia", "breakup", "rain"],
+    "Daughter - Medicine": ["rain", "midnight"],
+    "Daughter - Smother": ["empty_room", "dark_romance"],
+    "Daughter - Youth": ["nostalgia", "rain"],
     "AURORA - Runaway": ["lonely_street", "night_drive", "ocean_fog"],
-    "Mitski - First Love / Late Spring": ["dark_romance", "nostalgia", "breakup"],
-    "Mitski - I Bet on Losing Dogs": ["breakup", "lonely_street", "midnight"],
+    "Mitski - First Love / Late Spring": ["dark_romance", "nostalgia"],
+    "Mitski - I Bet on Losing Dogs": ["lonely_street", "midnight"],
     "Mitski - Francis Forever": ["nostalgia", "breakup", "rain"],
-    "Mitski - Class of 2013": ["nostalgia", "empty_room", "breakup"],
+    "Mitski - Class of 2013": ["nostalgia", "empty_room"],
     "Adele - Love in the Dark": ["breakup", "dark_romance", "midnight"],
-    "The Weeknd - Until I Bleed Out": ["midnight", "breakup", "cold"],
+    "The Weeknd - Until I Bleed Out": ["midnight", "cold"],
     "Arctic Monkeys - I Wanna Be Yours": ["dark_romance", "midnight"],
     "Joji - Slow Dancing in the Dark": ["dark_romance", "midnight", "breakup"],
     "Coldplay - The Scientist": ["nostalgia", "breakup", "rain"],
     "Arctic Monkeys - 505": ["night_drive", "dark_romance", "nostalgia"],
     "Arctic Monkeys - Do I Wanna Know?": ["dark_romance", "night_drive", "midnight"],
     "Arctic Monkeys - Why'd You Only Call Me When You're High?": ["night_drive", "neon_city", "midnight"],
-    "Coldplay - Fix You": ["breakup", "rain", "dark_romance"],
+    "Coldplay - Fix You": ["rain", "dark_romance"],
     "Kodaline - All I Want": ["breakup", "dark_romance", "nostalgia"],
     "Ludovico Einaudi - Experience": ["night_drive", "rain", "ocean_fog"],
     "Cigarettes After Sex - Sunsetz": ["dark_romance", "nostalgia", "night_drive"],
@@ -319,6 +356,7 @@ SONGS = {
     "Cigarettes After Sex - Nothing's Gonna Hurt You Baby": ["dark_romance", "midnight"],
     "Beach House - Space Song": ["moon", "ocean_fog", "midnight", "nostalgia"],
 }
+
 
 # =========================================================
 # STATE
@@ -334,579 +372,221 @@ DEFAULT_STATE = {
     "last_post": None,
 }
 
+
 def load_state():
+
     if not os.path.exists(STATE_FILE):
-        return json.loads(json.dumps(DEFAULT_STATE))
+        return DEFAULT_STATE.copy()
 
     try:
-        with open(STATE_FILE, "r", encoding="utf-8") as f:
-            state = json.load(f)
+
+        with open(STATE_FILE, "r", encoding="utf-8") as file:
+            state = json.load(file)
 
         for key, value in DEFAULT_STATE.items():
+
             if key not in state:
-                state[key] = json.loads(json.dumps(value))
+                state[key] = value
 
         return state
+
     except Exception as error:
-        print("State error:", error)
-        return json.loads(json.dumps(DEFAULT_STATE))
+
+        print(f"State error: {error}")
+
+        return DEFAULT_STATE.copy()
+
 
 def save_state(state):
-    temp_file = STATE_FILE + ".tmp"
-    with open(temp_file, "w", encoding="utf-8") as f:
-        json.dump(state, f, ensure_ascii=False, indent=2)
-    os.replace(temp_file, STATE_FILE)
 
-def is_admin(user_id):
-    return user_id in ADMIN_IDS
+    with open(STATE_FILE, "w", encoding="utf-8") as file:
+
+        json.dump(
+            state,
+            file,
+            ensure_ascii=False,
+            indent=2
+        )
+
 
 # =========================================================
-# THEME / TEXT
+# ADMIN
+# =========================================================
+
+def is_admin(user_id):
+
+    return user_id in ADMIN_IDS
+
+
+# =========================================================
+# TIME THEME
 # =========================================================
 
 def get_time_theme():
-    hour = datetime.now(ZoneInfo(TIMEZONE)).hour
+
+    hour = datetime.now(
+        ZoneInfo(TIMEZONE)
+    ).hour
 
     if 0 <= hour < 6:
-        return random.choice(["midnight", "rain", "cigarette", "moon", "empty_room"])
+
+        return random.choice([
+            "midnight",
+            "rain",
+            "cigarette",
+            "moon",
+            "empty_room"
+        ])
+
     if 6 <= hour < 12:
-        return random.choice(["nostalgia", "ocean_fog", "lonely_street"])
+
+        return random.choice([
+            "nostalgia",
+            "ocean_fog",
+            "lonely_street"
+        ])
+
     if 12 <= hour < 18:
-        return random.choice(["cold", "lonely_street", "neon_city", "rain"])
+
+        return random.choice([
+            "cold",
+            "lonely_street",
+            "neon_city",
+            "rain"
+        ])
+
     if 18 <= hour < 22:
-        return random.choice(["dark_romance", "night_drive", "neon_city", "breakup"])
-    return random.choice(["midnight", "breakup", "dark_romance", "night_drive", "cigarette"])
+
+        return random.choice([
+            "dark_romance",
+            "night_drive",
+            "neon_city",
+            "breakup"
+        ])
+
+    return random.choice([
+        "midnight",
+        "breakup",
+        "dark_romance",
+        "night_drive",
+        "cigarette"
+    ])
+
+
+# =========================================================
+# TEXT
+# =========================================================
 
 def choose_text(theme_name, state):
+
     theme = THEMES[theme_name]
+
     used = set(state.get("text_used", []))
 
     available = []
+
     for text in theme["texts"]:
+
         text_id = f"{theme_name}::{text}"
+
         if text_id not in used:
+
             available.append((text_id, text))
 
     if not available:
-        available = [(f"{theme_name}::{text}", text) for text in theme["texts"]]
+
+        available = [
+            (f"{theme_name}::{text}", text)
+            for text in theme["texts"]
+        ]
 
     selected_id, selected_text = random.choice(available)
-    state.setdefault("text_used", []).append(selected_id)
+
+    state["text_used"].append(selected_id)
 
     return selected_text
 
-# =========================================================
-# MUSIC
-# =========================================================
 
-ALLOWED_AUDIO = (".mp3", ".m4a", ".flac", ".wav", ".ogg")
+# =========================================================
+# MUSIC FILES
+# =========================================================
 
 def get_music_files():
+
     if not os.path.exists(MUSIC_FOLDER):
         return []
 
-    return sorted(
+    allowed = (
+        ".mp3",
+        ".m4a",
+        ".flac",
+        ".wav",
+        ".ogg"
+    )
+
+    return sorted([
         filename
         for filename in os.listdir(MUSIC_FOLDER)
-        if filename.lower().endswith(ALLOWED_AUDIO)
-    )
-
-def normalize_filename(filename):
-    name = os.path.splitext(filename)[0]
-    name = name.replace("_", " ").replace("–", "-").replace("—", "-")
-    name = re.sub(r"\s+", " ", name).strip()
-
-    # Remove common leading track numbers
-    name = re.sub(r"^\s*\d+(?:\s*[-_.]\s*|\s+)", "", name)
-
-    # Remove bitrate suffix
-    name = re.sub(
-        r"\s*[\(\[]?\b(128|192|256|320)\s*(kbps)?\b[\)\]]?\s*$",
-        "",
-        name,
-        flags=re.IGNORECASE,
-    )
-
-    return name.strip()
-
-def get_song_metadata(filename):
-    normalized = normalize_filename(filename)
-    lower = normalized.lower()
-
-    # Direct matching against known song names
-    for key in SONGS:
-        if key.lower() in lower:
-            artist, title = key.split(" - ", 1)
-            return title, artist
-
-    # Common "title - artist" pattern
-    parts = [x.strip() for x in re.split(r"\s+-\s+", normalized) if x.strip()]
-
-    if len(parts) >= 2:
-        return " - ".join(parts[1:]), parts[0]
-
-    return normalized, "Unknown Artist"
-
-def song_themes(filename):
-    title, artist = get_song_metadata(filename)
-    full = f"{artist} - {title}".lower()
-
-    matches = []
-    for song_name, themes in SONGS.items():
-        if song_name.lower() in full or full in song_name.lower():
-            matches.extend(themes)
-
-    return set(matches)
-
-def choose_music(theme_name, state):
-    files = get_music_files()
-    if not files:
-        return None
-
-    matched = [f for f in files if theme_name in song_themes(f)]
-
-    # Prefer songs explicitly matched to this theme.
-    candidates = matched if matched else files
-
-    used = set(state.get("music_used", []))
-    available = [f for f in candidates if f not in used]
-
-    if not available:
-        # Start a new cycle for these candidates.
-        state["music_used"] = [x for x in used if x not in candidates]
-        available = candidates[:]
-
-    selected = random.choice(available)
-    state.setdefault("music_used", []).append(selected)
-    return selected
-
-# =========================================================
-# PEXELS
-# =========================================================
-
-def get_pexels_photo(theme_name, state):
-    if not PEXELS_API_KEY:
-        print("PEXELS_API_KEY missing.")
-        return None
-
-    query = random.choice(THEMES[theme_name]["queries"])
-
-    url = "https://api.pexels.com/v1/search"
-    headers = {"Authorization": PEXELS_API_KEY}
-    params = {
-        "query": query,
-        "per_page": 30,
-        "orientation": "portrait",
-    }
-
-    try:
-        response = requests.get(url, headers=headers, params=params, timeout=20)
-
-        if response.status_code != 200:
-            print("Pexels error:", response.status_code, response.text[:300])
-            return None
-
-        photos = response.json().get("photos", [])
-        if not photos:
-            return None
-
-        used = set(state.get("photo_used", []))
-        fresh = [p for p in photos if str(p.get("id")) not in used]
-
-        if not fresh:
-            state["photo_used"] = []
-            fresh = photos
-
-        photo = random.choice(fresh)
-        photo_id = str(photo.get("id"))
-        state.setdefault("photo_used", []).append(photo_id)
-
-        image_url = (
-            photo.get("src", {}).get("large2x")
-            or photo.get("src", {}).get("large")
-            or photo.get("src", {}).get("portrait")
-            or photo.get("src", {}).get("original")
-        )
-
-        if not image_url:
-            return None
-
-        image_response = requests.get(image_url, timeout=30)
-
-        if image_response.status_code != 200:
-            return None
-
-        image = BytesIO(image_response.content)
-        image.seek(0)
-        return image
-
-    except Exception as error:
-        print("Pexels exception:", error)
-        return None
-
-# =========================================================
-# POST
-# =========================================================
-
-def create_caption(text, theme_name, title=None, artist=None):
-    emoji = random.choice(THEMES[theme_name]["emojis"])
-
-    if title and artist:
-        return f"{emoji} {text}\n\n🎧 {title} — {artist}{SIGNATURE}"
-
-    return f"{emoji} {text}{SIGNATURE}"
-
-async def send_photo(context, image, caption):
-    if image is None:
-        await context.bot.send_message(chat_id=CHANNEL, text=caption)
-        return False
-
-    try:
-        await context.bot.send_photo(
-            chat_id=CHANNEL,
-            photo=image,
-            caption=caption,
-        )
-        return True
-    except Exception as error:
-        print("Photo send error:", error)
-        await context.bot.send_message(chat_id=CHANNEL, text=caption)
-        return False
-
-async def publish_post(context):
-    state = load_state()
-
-    if state.get("paused"):
-        print("Posting paused.")
-        return False
-
-    theme_name = get_time_theme()
-    text = choose_text(theme_name, state)
-
-    post_number = state.get("post_count", 0)
-    is_music_post = post_number % 2 == 1
-
-    music_file = None
-    title = None
-    artist = None
-
-    if is_music_post:
-        music_file = choose_music(theme_name, state)
-        if music_file:
-            title, artist = get_song_metadata(music_file)
-
-    caption = create_caption(
-        text=text,
-        theme_name=theme_name,
-        title=title,
-        artist=artist,
-    )
-
-    image = get_pexels_photo(theme_name, state)
-    await send_photo(context, image, caption)
-
-    if music_file:
-        music_path = os.path.join(MUSIC_FOLDER, music_file)
-
-        try:
-            with open(music_path, "rb") as audio:
-                extension = os.path.splitext(music_file)[1].lower()
-                music_caption = f"🎧 {title} — {artist}\n🥀 silent ruins"
-
-                if extension in (".mp3", ".m4a", ".ogg", ".wav"):
-                    await context.bot.send_audio(
-                        chat_id=CHANNEL,
-                        audio=audio,
-                        caption=music_caption,
-                        title=title,
-                        performer=artist,
-                    )
-                else:
-                    await context.bot.send_document(
-                        chat_id=CHANNEL,
-                        document=audio,
-                        caption=music_caption,
-                    )
-
-            state["music_count"] = state.get("music_count", 0) + 1
-
-        except Exception as error:
-            print("Music send error:", error)
-
-    state["post_count"] = state.get("post_count", 0) + 1
-    state["last_post"] = datetime.now(ZoneInfo(TIMEZONE)).strftime("%Y-%m-%d %H:%M:%S")
-
-    save_state(state)
-
-    print(
-        f"Published | theme={theme_name} | "
-        f"music={bool(music_file)} | post={state['post_count']}"
-    )
-    return True
-
-# =========================================================
-# COMMANDS
-# =========================================================
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🥀 SilentRuins Bot is online 🖤")
-
-async def my_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"🆔 Your Telegram ID:\n{update.effective_user.id}"
-    )
-
-async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        await update.message.reply_text("🚫 Access denied.")
-        return
-
-    success = await publish_post(context)
-    await update.message.reply_text(
-        "✅ Post published 🥀" if success else "⏸️ Posting is paused."
-    )
-
-async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    state = load_state()
-    state["paused"] = True
-    save_state(state)
-    await update.message.reply_text("⏸️ SilentRuins paused 🖤")
-
-async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    state = load_state()
-    state["paused"] = False
-    save_state(state)
-    await update.message.reply_text("▶️ SilentRuins resumed 🥀")
-
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    state = load_state()
-
-    status = "⏸️ Paused" if state.get("paused") else "▶️ Running"
-
-    await update.message.reply_text(
-        f"🖤 SilentRuins Stats\n\n"
-        f"Status: {status}\n"
-        f"📤 Posts: {state.get('post_count', 0)}\n"
-        f"🎧 Music posts: {state.get('music_count', 0)}\n"
-        f"🎵 Music files: {len(get_music_files())}\n"
-        f"🌑 Themes: {len(THEMES)}\n"
-        f"📝 Texts: {sum(len(x['texts']) for x in THEMES.values())}\n"
-        f"🖼 Photos used: {len(state.get('photo_used', []))}\n"
-        f"🕐 Timezone: {TIMEZONE}\n\n"
-        f"Last post:\n{state.get('last_post') or 'Never'}"
-    )
-
-async def songs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    files = get_music_files()
-
-    if not files:
-        await update.message.reply_text("🎵 No music files found.")
-        return
-
-    lines = ["🎵 Music library:\n"]
-
-    for index, filename in enumerate(files, start=1):
-        title, artist = get_song_metadata(filename)
-        lines.append(f"{index}. {title} — {artist}")
-
-    text = "\n".join(lines)
-
-    # Telegram message limit protection
-    if len(text) > 3900:
-        text = text[:3900] + "\n..."
-
-    await update.message.reply_text(text)
-
-async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update.effective_user.id):
-        return
-
-    await update.message.reply_text(
-        "🥀 SilentRuins Control Panel\n\nchoose your move 🖤",
-        reply_markup=panel_keyboard(),
-    )
-
-def panel_keyboard():
-    return InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("📤 POST", callback_data="post"),
-            InlineKeyboardButton("📊 STATS", callback_data="stats"),
-        ],
-        [
-            InlineKeyboardButton("⏸️ PAUSE", callback_data="pause"),
-            InlineKeyboardButton("▶️ RESUME", callback_data="resume"),
-        ],
+        if filename.lower().endswith(allowed)
     ])
 
-async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-
-    if not is_admin(query.from_user.id):
-        await query.edit_message_text("🚫 Access denied.")
-        return
-
-    state = load_state()
-
-    if query.data == "post":
-        success = await publish_post(context)
-        await query.edit_message_text(
-            "✅ Post published 🥀" if success else "⏸️ Posting is paused.",
-            reply_markup=panel_keyboard(),
-        )
-
-    elif query.data == "pause":
-        state["paused"] = True
-        save_state(state)
-        await query.edit_message_text(
-            "⏸️ Automatic posting paused.",
-            reply_markup=panel_keyboard(),
-        )
-
-    elif query.data == "resume":
-        state["paused"] = False
-        save_state(state)
-        await query.edit_message_text(
-            "▶️ Automatic posting resumed.",
-            reply_markup=panel_keyboard(),
-        )
-
-    elif query.data == "stats":
-        await query.edit_message_text(
-            f"📊 SilentRuins\n\n"
-            f"📤 Posts: {state.get('post_count', 0)}\n"
-            f"🎧 Music: {state.get('music_count', 0)}\n"
-            f"🎵 Songs: {len(get_music_files())}\n"
-            f"🌑 Themes: {len(THEMES)}\n"
-            f"🖼 Photos used: {len(state.get('photo_used', []))}\n"
-            f"Status: {'⏸️ Paused' if state.get('paused') else '▶️ Running'}\n\n"
-            f"🕒 Last post:\n{state.get('last_post') or 'Never'}",
-            reply_markup=panel_keyboard(),
-        )
 
 # =========================================================
-# RECEIVE MP3 FROM TELEGRAM
+# SONG METADATA
 # =========================================================
 
-async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user = update.effective_user
+def get_song_metadata(filename):
 
-    if not user or not is_admin(user.id):
-        return
+    name = os.path.splitext(filename)[0]
 
-    message = update.effective_message
-    audio = message.audio
+    name = name.replace("_", " ")
+    name = name.replace("–", "-")
+    name = name.replace("—", "-")
 
-    if not audio:
-        return
+    name = re.sub(r"\s+", " ", name).strip()
 
-    original_name = audio.file_name or f"telegram_{audio.file_unique_id}.mp3"
-
-    base, ext = os.path.splitext(original_name)
-    if not ext:
-        ext = ".mp3"
-
-    if ext.lower() not in ALLOWED_AUDIO:
-        ext = ".mp3"
-
-    safe_base = re.sub(r'[\\/:*?"<>|]+', "_", base).strip()
-    if not safe_base:
-        safe_base = f"telegram_{audio.file_unique_id}"
-
-    filename = f"{safe_base}{ext.lower()}"
-    destination = os.path.join(MUSIC_FOLDER, filename)
-
-    # Avoid overwriting an existing file.
-    counter = 1
-    while os.path.exists(destination):
-        filename = f"{safe_base}_{counter}{ext.lower()}"
-        destination = os.path.join(MUSIC_FOLDER, filename)
-        counter += 1
-
-    try:
-        telegram_file = await audio.get_file()
-        await telegram_file.download_to_drive(destination)
-
-        title = audio.title or os.path.splitext(filename)[0]
-        artist = audio.performer or "Unknown Artist"
-
-        await message.reply_text(
-            f"✅ Song added to library 🥀\n\n"
-            f"🎧 {title}\n"
-            f"👤 {artist}\n"
-            f"📁 {filename}\n\n"
-            f"Use /songs to see your music library."
-        )
-
-        print(f"New music added: {filename}")
-
-    except Exception as error:
-        print("Audio download error:", error)
-        await message.reply_text(
-            "❌ Could not save this audio file."
-        )
-
-# =========================================================
-# MAIN
-# =========================================================
-
-def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN is missing.")
-
-    if not PEXELS_API_KEY:
-        raise RuntimeError("PEXELS_API_KEY is missing.")
-
-    if not ADMIN_IDS:
-        print("WARNING: ADMIN_IDS is empty.")
-
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
-
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("id", my_id))
-    app.add_handler(CommandHandler("post", post_now))
-    app.add_handler(CommandHandler("pause", pause))
-    app.add_handler(CommandHandler("resume", resume))
-    app.add_handler(CommandHandler("stats", stats))
-    app.add_handler(CommandHandler("songs", songs))
-    app.add_handler(CommandHandler("panel", panel))
-
-    # Receive MP3/audio files sent directly to the bot.
-    app.add_handler(MessageHandler(filters.AUDIO, receive_audio))
-
-    app.add_handler(CallbackQueryHandler(panel_callback))
-
-    # One automatic post every hour.
-    app.job_queue.run_repeating(
-        publish_post,
-        interval=3600,
-        first=3600,
+    # حذف شماره ابتدای فایل
+    name = re.sub(
+        r"^\s*\d+\s*[-_.]?\s*",
+        "",
+        name
     )
 
-    print("=" * 60)
-    print("🥀 SilentRuins Bot is running...")
-    print(f"🖤 Channel: {CHANNEL}")
-    print("⏱ Posting: EVERY 1 HOUR")
-    print("🎧 Music: EVERY 2 HOURS")
-    print("🖼 Pexels: ENABLED")
-    print(f"🌑 Themes: {len(THEMES)}")
-    print("🎵 Telegram MP3 upload: ENABLED")
-    print("🎛 Admin panel: ENABLED")
-    print("=" * 60)
+    # حذف کیفیت
+    name = re.sub(
+        r"\s*\(?\b(128|192|256|320)\s*(kbps)?\)?\s*$",
+        "",
+        name,
+        flags=re.IGNORECASE
+    )
 
-    app.run_polling()
+    # تطبیق مستقیم با بانک آهنگ‌ها
+    normalized = name.lower()
 
-if __name__ == "__main__":
-    main()
+    for song_name in SONGS:
+
+        if song_name.lower() == normalized:
+
+            artist, title = song_name.split(" - ", 1)
+
+            return title, artist
+
+    # تطبیق تقریبی
+    for song_name in SONGS:
+
+        if song_name.lower() in normalized:
+
+            artist, title = song_name.split(" - ", 1)
+
+            return title, artist
+
+    # حالت Artist - Title
+    parts = [
+        x.strip()
+        for x in re.split(r"\s+-\s+", name)
+        if x.strip()
+    ]
+
+    if len(parts) >= 2:
+
+        return " - ".join(parts
