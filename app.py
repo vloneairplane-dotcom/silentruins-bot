@@ -572,8 +572,8 @@ def main():
     )
 
 
-    print(
-        """
+if len(parts) >= 2:
+    return " - ".join(parts)
 ========================
 
 🥀 SilentRuins Started
