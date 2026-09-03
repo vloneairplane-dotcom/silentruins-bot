@@ -2,9 +2,9 @@
 
 ## Environment variables
 
-BOT_TOKEN=your_bot_token
-PEXELS_API_KEY=your_pexels_key
-ADMIN_IDS=123456789
+BOT_TOKEN=8756529524:AAFyR4Lp6OAf6yAa0CERdW5BdwODu_mgEyo
+PEXELS_API_KEY=7mkEkhNN3yrQ0ob9H1VbQvsWViEPRfmegauy8EeWe4r0ssiPglNU52H2
+ADMIN_IDS=8396139958
 CHANNEL=@songsandscars
 TIMEZONE=Asia/Tehran
 
