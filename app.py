@@ -112,38 +112,27 @@ THEMES = [
     }
 
 ]
-
-
-
 # ==========================
 # STATE
 # ==========================
 
 def load_state():
 
-    if not os.path.exists(
-        STATE_FILE
-    ):
-
+    if not os.path.exists(STATE_FILE):
         return {
             "posts": 0,
             "music": 0
         }
 
-
     try:
-
         with open(
             STATE_FILE,
             "r",
             encoding="utf-8"
         ) as f:
-
             return json.load(f)
 
-
     except:
-
         return {
             "posts": 0,
             "music": 0
@@ -174,38 +163,24 @@ def is_admin(user_id):
 
 
 
-# ==========================
-# HELPERS
-# ==========================
-
 def clean_filename(name):
 
-    name = re.sub(
+    return re.sub(
         r'[\\/:*?"<>|]+',
         "_",
         name
     )
 
-    return name.strip()
-
 
 
 def get_music():
 
-    if not os.path.exists(
-        MUSIC_FOLDER
-    ):
+    if not os.path.exists(MUSIC_FOLDER):
         return []
 
-
     return [
-
         x
-
-        for x in os.listdir(
-            MUSIC_FOLDER
-        )
-
+        for x in os.listdir(MUSIC_FOLDER)
         if x.lower().endswith(
             (
                 ".mp3",
@@ -214,29 +189,24 @@ def get_music():
                 ".ogg"
             )
         )
-
     ]
 
 
 
 def choose_theme():
 
-    return random.choice(
-        THEMES
-    )
+    return random.choice(THEMES)
+
 
 
 def create_caption(theme):
 
-    text = random.choice(
-        theme["texts"]
-    )
-
     return (
-        text
+        random.choice(theme["texts"])
         +
         SIGNATURE
-    )# ==========================
+    )
+# ==========================
 # PEXELS PHOTO
 # ==========================
 
@@ -245,98 +215,66 @@ def get_photo(theme):
     if not PEXELS_KEY:
         return None
 
-
     try:
 
         url = "https://api.pexels.com/v1/search"
-
 
         headers = {
             "Authorization": PEXELS_KEY
         }
 
-
         params = {
-
             "query": theme["query"],
-
             "per_page": 10,
-
             "orientation": "portrait"
-
         }
 
 
         response = requests.get(
-
             url,
-
             headers=headers,
-
             params=params,
-
             timeout=20
-
         )
 
 
         data = response.json()
 
-
         photos = data.get(
-
             "photos",
-
             []
-
         )
 
 
         if not photos:
-
             return None
 
 
-
         selected = random.choice(
-
             photos
-
         )
 
 
         image_url = selected["src"]["large"]
 
 
-
         image = requests.get(
-
             image_url,
-
             timeout=20
-
         ).content
-
 
 
         return BytesIO(image)
 
 
-
     except Exception as e:
 
-
         print(
-
             "Photo error:",
-
             e
-
         )
 
-
         return None
-
 
 
 
@@ -347,153 +285,104 @@ def get_photo(theme):
 
 async def publish(context):
 
-
     state = load_state()
-
 
 
     theme = choose_theme()
 
 
-
     caption = create_caption(
-
         theme
-
     )
-
 
 
     photo = get_photo(
-
         theme
-
     )
-
 
 
     try:
 
-
         if photo:
-
 
             photo.seek(0)
 
-
             await context.bot.send_photo(
-
                 chat_id=CHANNEL,
-
                 photo=photo,
-
                 caption=caption
-
             )
 
 
         else:
 
-
             await context.bot.send_message(
-
                 chat_id=CHANNEL,
-
                 text=caption
-
             )
-
 
 
 
         songs = get_music()
 
 
-
         if songs:
 
-
             song = random.choice(
-
                 songs
-
             )
-
 
 
             path = os.path.join(
-
                 MUSIC_FOLDER,
-
                 song
-
             )
 
 
-
             with open(
-
                 path,
-
                 "rb"
-
             ) as audio:
 
 
-
                 await context.bot.send_audio(
-
                     chat_id=CHANNEL,
-
                     audio=audio,
-
                     caption="🎧 silent ruins 🥀"
-
                 )
-
 
 
             state["music"] += 1
 
 
 
-
-
         state["posts"] += 1
 
 
-
         save_state(
-
             state
-
         )
-
 
 
         print(
-
             "Post sent"
-
         )
-
 
 
     except Exception as e:
 
-
         print(
-
             "Publish error:",
-
             e
-
         )# ==========================
 # COMMANDS
 # ==========================
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def start(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     await update.message.reply_text(
         "🥀 SilentRuins Online"
@@ -501,7 +390,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def myid(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     await update.message.reply_text(
         str(
@@ -511,7 +403,10 @@ async def myid(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def post_now(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not is_admin(
         update.effective_user.id
@@ -530,7 +425,10 @@ async def post_now(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def stats(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not is_admin(
         update.effective_user.id
@@ -560,7 +458,10 @@ Files: {len(get_music())}
 # ==========================
 
 
-async def addsong(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def addsong(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not is_admin(
         update.effective_user.id
@@ -574,8 +475,10 @@ async def addsong(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-
-async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def receive_audio(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
 
     if not is_admin(
         update.effective_user.id
@@ -588,7 +491,6 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     if not audio:
-
         return
 
 
@@ -616,11 +518,8 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
     path = os.path.join(
-
         MUSIC_FOLDER,
-
         filename
-
     )
 
 
@@ -631,18 +530,14 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     while os.path.exists(path):
 
-
         name, ext = os.path.splitext(
             filename
         )
 
 
         path = os.path.join(
-
             MUSIC_FOLDER,
-
             f"{name}_{number}{ext}"
-
         )
 
 
@@ -650,20 +545,14 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 
-
     try:
-
 
         telegram_file = await audio.get_file()
 
 
-
         await telegram_file.download_to_drive(
-
             path
-
         )
-
 
 
         await update.message.reply_text(
@@ -677,33 +566,26 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
 
 
-
         print(
-
             "New song:",
-
             path
-
         )
-
 
 
     except Exception as e:
 
-
         print(
-
             e
+        )
 
+        await update.message.reply_text(
+            "❌ خطا در ذخیره آهنگ"
         )
 
 
-        await update.message.reply_text(
-
-            "❌ خطا در ذخیره آهنگ"
-
-        )# ==========================
+# ==========================
 # RENDER WEB SERVER
+# ==========================  # RENDER WEB SERVER
 # ==========================
 
 
@@ -778,7 +660,6 @@ def main():
 
 
 
-
     app = (
         ApplicationBuilder()
         .token(BOT_TOKEN)
@@ -786,97 +667,76 @@ def main():
     )
 
 
-    # Commands
+
+    # COMMANDS
 
 
     app.add_handler(
 
         CommandHandler(
-
             "start",
-
             start
-
         )
 
     )
 
 
-
     app.add_handler(
 
         CommandHandler(
-
             "id",
-
             myid
-
         )
 
     )
 
 
-
     app.add_handler(
 
         CommandHandler(
-
             "post",
-
             post_now
-
         )
 
     )
 
 
-
     app.add_handler(
 
         CommandHandler(
-
             "stats",
-
             stats
-
         )
 
     )
-
 
 
     app.add_handler(
 
         CommandHandler(
-
             "addsong",
-
             addsong
-
         )
 
     )
 
 
 
-    # Receive Music
+    # MUSIC RECEIVER
 
 
     app.add_handler(
 
         MessageHandler(
-
             filters.AUDIO,
-
             receive_audio
-
         )
 
     )
 
 
 
-    # Auto post every hour
+    # AUTO POST EVERY HOUR
 
 
     app.job_queue.run_repeating(
