@@ -43,17 +43,58 @@ PHOTO_TIMES = [t.strip() for t in os.environ.get("PHOTO_TIMES", "10:00,22:00").s
 MUSIC_TIMES = [t.strip() for t in os.environ.get("MUSIC_TIMES", "16:00").split(",") if t.strip()]
 
 LIBRARY_FILE = Path("library.json")
+STATE_FILE = Path("state.json")
 
-# Search terms used to pull mood-matched photos from Unsplash.
-# Feel free to edit/extend this list to steer the channel's visual mood.
-MOOD_KEYWORDS = [
-    "abandoned ruins", "foggy forest", "gothic architecture", "misty mountains",
-    "old library candlelight", "rain on window at night", "melancholic landscape",
-    "dark academia aesthetic", "ancient castle ruins", "moody autumn forest",
-    "lonely lighthouse fog", "abandoned cathedral", "night rain city street",
-    "withered roses", "moonlit graveyard", "empty gothic hallway",
-    "solitude nature dusk", "ruined monastery", "stormy sea cliff",
-    "candle shadows dark room", "black and white rain",
+# Search terms used to pull mood-matched photos from Unsplash, grouped into
+# categories. The category is what gets matched against a track's mood tag
+# (see receive_audio) so the music posted later can fit the last photo.
+MOOD_CATEGORIES = {
+    "rain": [
+        "rain on window at night", "night rain city street",
+        "black and white rain", "stormy sea cliff",
+    ],
+    "ruins": [
+        "abandoned ruins", "ancient castle ruins",
+        "abandoned cathedral", "ruined monastery",
+    ],
+    "forest": [
+        "foggy forest", "misty mountains",
+        "moody autumn forest", "solitude nature dusk",
+    ],
+    "gothic": [
+        "gothic architecture", "dark academia aesthetic",
+        "empty gothic hallway", "old library candlelight",
+        "candle shadows dark room",
+    ],
+    "melancholy": [
+        "melancholic landscape", "withered roses",
+        "moonlit graveyard", "lonely lighthouse fog",
+    ],
+}
+MOOD_TAGS = list(MOOD_CATEGORIES.keys())
+
+# Short "heavy" opening lines for photo captions. Edit/extend freely.
+MOOD_QUOTES = [
+    "some memories sound like rain. 🖤",
+    "we are all ghosts of who we used to be. 🖤",
+    "silence has its own kind of noise. 🖤",
+    "the ruins remember what we forgot. 🖤",
+    "even the moon gets tired of shining. 🖤",
+    "some nights ask questions the morning can't answer. 🖤",
+    "grief is just love with nowhere to go. 🖤",
+    "the fog doesn't hide things, it holds them. 🖤",
+    "old walls keep the softest secrets. 🖤",
+    "we bury feelings in places that still ache. 🖤",
+    "every ruin was once someone's home. 🖤",
+    "the quiet ones carry the loudest storms. 🖤",
+    "some roses wilt before they're picked. 🖤",
+    "distance is just silence wearing miles. 🖤",
+    "the past doesn't knock, it just walks in. 🖤",
+    "some scars are just maps of who survived. 🖤",
+    "the dark isn't empty, it's just honest. 🖤",
+    "we save the saddest songs for the emptiest rooms. 🖤",
+    "even shadows need somewhere to rest. 🖤",
+    "some doors close so quietly you don't hear it happen. 🖤",
 ]
 
 logging.basicConfig(
@@ -99,6 +140,18 @@ def save_library(data):
     LIBRARY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def load_state():
+    if STATE_FILE.exists():
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    return {}
+
+
+def save_state(data):
+    state = load_state()
+    state.update(data)
+    STATE_FILE.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
 def is_admin(update: Update) -> bool:
     return bool(update.effective_user) and update.effective_user.id == ADMIN_USER_ID
 
@@ -107,32 +160,60 @@ def is_admin(update: Update) -> bool:
 # Unsplash
 # ---------------------------------------------------------------------------
 def fetch_random_photo():
-    query = random.choice(MOOD_KEYWORDS)
-    resp = requests.get(
-        "https://api.unsplash.com/photos/random",
-        params={"query": query, "orientation": "portrait"},
-        headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
-        timeout=15,
-    )
-    resp.raise_for_status()
-    data = resp.json()
+    """Pick a mood category + keyword, search Unsplash biased toward dark/black
+    toned results for a moodier, higher-quality look, and return
+    (photo_url, caption, mood_category)."""
+    category = random.choice(MOOD_TAGS)
+    query = random.choice(MOOD_CATEGORIES[category])
+
+    photo = None
+    for page in (random.randint(1, 3), 1):
+        resp = requests.get(
+            "https://api.unsplash.com/search/photos",
+            params={
+                "query": query,
+                "color": "black",  # biases results toward a dark/moody palette
+                "orientation": "portrait",
+                "per_page": 30,
+                "page": page,
+            },
+            headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        results = resp.json().get("results", [])
+        if results:
+            photo = random.choice(results)
+            break
+
+    if photo is None:
+        # Fallback if that mood/page combo had no results.
+        resp = requests.get(
+            "https://api.unsplash.com/photos/random",
+            params={"query": query, "orientation": "portrait"},
+            headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
+            timeout=15,
+        )
+        resp.raise_for_status()
+        photo = resp.json()
 
     # Unsplash API guidelines require pinging the download endpoint whenever
     # a photo is actually used, and crediting the photographer + Unsplash.
     try:
         requests.get(
-            data["links"]["download_location"],
+            photo["links"]["download_location"],
             headers={"Authorization": f"Client-ID {UNSPLASH_ACCESS_KEY}"},
             timeout=10,
         )
     except requests.RequestException:
         logger.warning("Could not ping Unsplash download endpoint")
 
-    photographer = data["user"]["name"]
-    photographer_link = data["user"]["links"]["html"] + "?utm_source=silent_ruins_bot&utm_medium=referral"
-    photo_url = data["urls"]["regular"]
-    caption = f"📷 {photographer} / Unsplash\n{photographer_link}"
-    return photo_url, caption
+    quote = random.choice(MOOD_QUOTES)
+    photographer = photo["user"]["name"]
+    photographer_link = photo["user"]["links"]["html"] + "?utm_source=silent_ruins_bot&utm_medium=referral"
+    photo_url = photo["urls"]["full"]  # higher resolution than "regular"
+    caption = f"{quote}\n\n📷 {photographer} / Unsplash\n{photographer_link}"
+    return photo_url, caption, category
 
 
 # ---------------------------------------------------------------------------
@@ -147,9 +228,10 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, text: str):
 
 async def post_photo_job(context: ContextTypes.DEFAULT_TYPE):
     try:
-        url, caption = fetch_random_photo()
+        url, caption, category = fetch_random_photo()
         await context.bot.send_photo(chat_id=CHANNEL_ID, photo=url, caption=caption)
-        logger.info("Posted photo")
+        save_state({"last_photo_mood": category})
+        logger.info("Posted photo (mood=%s)", category)
     except Exception as e:
         logger.exception("Failed to post photo")
         await notify_admin(context, f"⚠️ خطا در پست عکس: {e}")
@@ -165,12 +247,23 @@ async def post_music_job(context: ContextTypes.DEFAULT_TYPE):
         library["unplayed"] = [t["file_id"] for t in library["tracks"]]
         random.shuffle(library["unplayed"])
 
-    file_id = library["unplayed"].pop(0)
+    # Prefer a track tagged with the same mood as the last posted photo,
+    # without breaking the "everyone plays once before a repeat" rule.
+    target_mood = load_state().get("last_photo_mood")
+    mood_by_id = {t["file_id"]: t.get("mood") for t in library["tracks"]}
+    chosen_index = 0
+    if target_mood:
+        for i, fid in enumerate(library["unplayed"]):
+            if mood_by_id.get(fid) == target_mood:
+                chosen_index = i
+                break
+
+    file_id = library["unplayed"].pop(chosen_index)
     save_library(library)
 
     try:
         await context.bot.send_audio(chat_id=CHANNEL_ID, audio=file_id)
-        logger.info("Posted music")
+        logger.info("Posted music (target mood=%s)", target_mood)
     except Exception as e:
         logger.exception("Failed to post music")
         await notify_admin(context, f"⚠️ خطا در پست موزیک: {e}")
@@ -188,7 +281,10 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "/photo_now — همین الان یه عکس متناسب با حال‌وهوای چنل پست کن\n"
         "/music_now — همین الان یه آهنگ از کتابخونه پست کن\n"
         "/status — وضعیت کتابخونه موزیک\n\n"
-        "برای اضافه کردن آهنگ، کافیه فایل صوتی رو همینجا (پیوی) برام بفرستی."
+        "برای اضافه کردن آهنگ، کافیه فایل صوتی رو همینجا (پیوی) برام بفرستی.\n"
+        "اگه موقع فرستادنش تو کپشن یکی از این کلمه‌ها رو بنویسی، آهنگ به همون "
+        "حال‌وهوا تگ می‌شه و بیشتر وقت‌ها بعد از عکس‌های همون حس پخش می‌شه:\n"
+        f"{', '.join(MOOD_TAGS)}"
     )
 
 
@@ -222,11 +318,18 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not audio:
         return
 
+    caption_text = (update.message.caption or "").lower()
+    mood = next((tag for tag in MOOD_TAGS if tag in caption_text), None)
+
     library = load_library()
     title = getattr(audio, "title", None) or "بدون‌نام"
-    library["tracks"].append({"file_id": audio.file_id, "title": title})
+    library["tracks"].append({"file_id": audio.file_id, "title": title, "mood": mood})
     save_library(library)
-    await update.message.reply_text(f"✅ «{title}» اضافه شد. (مجموع کتابخونه: {len(library['tracks'])})")
+
+    mood_note = f" (حال‌وهوا: {mood})" if mood else " (بدون حال‌وهوای خاص)"
+    await update.message.reply_text(
+        f"✅ «{title}» اضافه شد{mood_note}. (مجموع کتابخونه: {len(library['tracks'])})"
+    )
 
 
 # ---------------------------------------------------------------------------
