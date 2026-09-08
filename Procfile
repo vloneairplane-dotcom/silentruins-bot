@@ -1,1 +1,1 @@
-worker: python bot.py
+worker: python v51_runtime.py
