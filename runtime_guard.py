@@ -3,18 +3,50 @@
 V4.2 production safety/matching layer. It patches the legacy bot at startup so
 music selection has strong semantic matching, exploration/diversity, and a
 longer preview cooldown; audio analytics are recorded only after Telegram
-accepts the file; and Pexels keeps the cinematic look without near-black
-images.
+accepts the file; Pexels keeps the cinematic look without near-black images;
+and runtime data is directed to persistent Railway storage when available.
 """
 from __future__ import annotations
 
 import random
 from pathlib import Path
 
-GUARD_VERSION = "4.2.0-matching-engine"
+GUARD_VERSION = "4.2.1-persistent-library"
 
 
 def _patch_source(source: str) -> str:
+    # ------------------------------------------------------------------
+    # Persistent runtime data: Railway Volume -> /data.
+    # ------------------------------------------------------------------
+    old_data = 'DATA_DIR = Path(os.getenv("DATA_DIR", ".")).expanduser()'
+    new_data = '''_railway = bool(os.getenv("RAILWAY_ENVIRONMENT") or os.getenv("RAILWAY_PROJECT_ID"))
+_data_dir_env = os.getenv("DATA_DIR")
+DATA_DIR = Path(_data_dir_env or ("/data" if _railway else ".")).expanduser()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+# One-time migration: if a deployment already has runtime data in the project
+# directory, copy it into /data before the persistent store is opened.
+if _railway and DATA_DIR.resolve() != Path(".").resolve():
+    for _name in ("library.json", "state.json", "silentruins.db"):
+        _src = Path(_name)
+        _dst = DATA_DIR / _name
+        if _src.exists() and not _dst.exists():
+            try:
+                _dst.write_bytes(_src.read_bytes())
+            except Exception:
+                pass
+    _src_music = Path("music")
+    _dst_music = DATA_DIR / "music"
+    if _src_music.exists() and not _dst_music.exists():
+        try:
+            import shutil
+            shutil.copytree(_src_music, _dst_music)
+        except Exception:
+            pass
+'''
+    if old_data in source:
+        source = source.replace(old_data, new_data, 1)
+
     # ------------------------------------------------------------------
     # Music selector: total function + semantic matching + exploration.
     # ------------------------------------------------------------------
@@ -48,8 +80,6 @@ def _patch_source(source: str) -> str:
         return track_match(track, mood, MOODS, MOOD_ALIASES)
 
     def _selection_score(track):
-        # Semantic fit is primary. A small exploration bonus prevents the same
-        # few high-scoring songs from dominating a library of 50+ tracks.
         semantic = _semantic_score(track)
         count = _play_count(track)
         exploration = 0.10 if count == 0 else (0.06 if count <= 1 else 0.025 if count <= 2 else 0.0)
@@ -59,9 +89,6 @@ def _patch_source(source: str) -> str:
         preview_recent = [x for x in (state.get("preview_recent_track_ids", []) or []) if x]
         preview_window = max(30, MAX_CANDIDATES * 3)
         preview_excluded = set(preview_recent[-preview_window:])
-
-        # Preview never repeats a recent preview track while there are fresh
-        # library choices. Production cooldown is also respected.
         pool = [
             t for t in tracks
             if t["file_id"] not in cooldown_ids
@@ -77,12 +104,9 @@ def _patch_source(source: str) -> str:
         ranked = sorted(pool, key=_selection_score, reverse=True)
         if mood and ranked:
             top_score = _selection_score(ranked[0])
-            # Allow near-best semantic matches so previews do not become a
-            # deterministic replay of the same song.
             shortlist = [t for t in ranked if _selection_score(t) >= top_score - 0.13]
         else:
             shortlist = ranked
-
         if not shortlist:
             shortlist = ranked[:5]
         chosen = random.choice(shortlist[: min(6, len(shortlist))])
@@ -158,7 +182,7 @@ def _patch_source(source: str) -> str:
     source = source[:start] + replacement + source[end:]
 
     # ------------------------------------------------------------------
-    # Image picker: cinematic darkness without unusable near-black results.
+    # Image picker: cinematic darkness without unusable near-black images.
     # ------------------------------------------------------------------
     start = source.index("def _pick_dark_photo(photos, excluded_urls=None):")
     end = source.index("\n\ndef fetch_pexels_photo", start)
@@ -180,9 +204,6 @@ def _patch_source(source: str) -> str:
         width = float(photo.get("width") or 0)
         height = float(photo.get("height") or 0)
         resolution = min(1.0, (width * height) / 12000000.0) if width and height else 0.0
-
-        # Sweet spot: dark enough for SilentRuins, bright enough to retain
-        # visible subject/detail in Telegram.
         readability = 1.0 - min(1.0, abs(lum - 62.0) / 62.0)
         if lum < 30:
             readability *= 0.15
@@ -190,13 +211,11 @@ def _patch_source(source: str) -> str:
             readability *= 0.45
         elif lum > 125:
             readability *= 0.55
-
         score = readability * 0.82 + resolution * 0.18
         scored.append((score, lum, photo))
 
     if not scored:
         return None
-
     scored.sort(key=lambda item: item[0], reverse=True)
     top = scored[: min(8, len(scored))]
     return random.choice(top)[2]
