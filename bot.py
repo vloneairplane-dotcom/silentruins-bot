@@ -101,6 +101,10 @@ MUSIC_TIMES = [t.strip() for t in MUSIC_TIMES_RAW.split(",") if t.strip()]
 
 QUALITY_THRESHOLD = int(os.getenv("QUALITY_THRESHOLD", "85"))
 MAX_CANDIDATES = max(5, int(os.getenv("MAX_CANDIDATES", "10")))
+try:
+    MUSIC_COOLDOWN_POSTS = max(1, int(os.getenv("MUSIC_COOLDOWN_POSTS", "8")))
+except ValueError:
+    MUSIC_COOLDOWN_POSTS = 8
 
 POST_INTERVAL_HOURS = os.getenv("POST_INTERVAL_HOURS")
 try:
@@ -388,16 +392,38 @@ def build_main_caption(mood, state=None, peek=True):
 # آهنگ — چرخه‌ی بدون تکرار + اولویت آهنگ هم‌حس با عکس
 # ---------------------------------------------------------------------------
 def get_next_track(mood=None, peek=False):
+    """
+    Pick a track without repeating recently published songs.
+
+    Production mode:
+    - keeps the normal unplayed cycle;
+    - when a cycle restarts, avoids the last MUSIC_COOLDOWN_POSTS tracks
+      whenever enough other tracks exist;
+    - prefers a semantic mood match among the eligible tracks.
+
+    Preview mode:
+    - never consumes the library;
+    - uses the same recent-track cooldown so repeated previews are less noisy.
+    """
     lib = load_library()
-    if not lib["tracks"]:
+    tracks = lib.get("tracks", [])
+    if not tracks:
         return None
 
+    state = load_state()
+    recent_ids = [fid for fid in (state.get("recent_track_ids", []) or []) if fid]
+    cooldown_ids = set(recent_ids[-MUSIC_COOLDOWN_POSTS:])
+
+    def eligible_pool(items, avoid_recent=True):
+        items = [t for t in items if t]
+        if avoid_recent:
+            fresh = [t for t in items if t.get("file_id") not in cooldown_ids]
+            if fresh:
+                return fresh
+        return items
+
     if peek:
-        # Preview/candidate generation must not consume the library. Pick from the
-        # strongest semantic matches while avoiding tracks used very recently.
-        state = load_state()
-        recent_ids = set(state.get("recent_track_ids", []) or [])
-        pool = [t for t in lib["tracks"] if t.get("file_id") not in recent_ids] or list(lib["tracks"])
+        pool = eligible_pool(tracks, avoid_recent=True)
         if mood:
             ranked = sorted(
                 pool,
@@ -407,33 +433,48 @@ def get_next_track(mood=None, peek=False):
             if ranked:
                 top_score = track_match(ranked[0], mood, MOODS, MOOD_ALIASES)
                 threshold = max(0.70, top_score - 0.08)
-                top = [t for t in ranked if track_match(t, mood, MOODS, MOOD_ALIASES) >= threshold]
-                # If the best available match is below the 0.70 preference floor,
-                # still return the best-ranked track instead of choosing from an empty list.
-                if not top:
-                    return ranked[0]
+                top = [
+                    t for t in ranked
+                    if track_match(t, mood, MOODS, MOOD_ALIASES) >= threshold
+                ]
                 return random.choice(top[: max(1, min(5, len(top)))])
         return random.choice(pool)
 
-    if not lib["unplayed"]:
-        lib["unplayed"] = [t["file_id"] for t in lib["tracks"]]
-        random.shuffle(lib["unplayed"])
+    unplayed = [t["file_id"] for t in lib.get("tracks", []) if t.get("file_id") in set(lib.get("unplayed", []))]
+    if not unplayed:
+        cycle_tracks = eligible_pool(tracks, avoid_recent=True)
+        if not cycle_tracks:
+            cycle_tracks = tracks
+        unplayed = [t["file_id"] for t in cycle_tracks]
+        random.shuffle(unplayed)
+        # Keep the cycle consistent with the selected pool; tracks excluded by the
+        # cooldown will become available again after this cycle is exhausted.
+        lib["unplayed"] = unplayed
 
-    chosen = lib["unplayed"][0]
+    candidates_by_id = {t.get("file_id"): t for t in tracks}
+    chosen = None
+
     if mood:
-        mood_by_id = {t["file_id"]: t.get("mood") for t in lib["tracks"]}
         for fid in lib["unplayed"]:
-            if mood_by_id.get(fid) == mood:
+            track = candidates_by_id.get(fid)
+            if track and fid not in cooldown_ids and track_match(track, mood, MOODS, MOOD_ALIASES) >= 0.70:
                 chosen = fid
                 break
 
+    if chosen is None:
+        for fid in lib["unplayed"]:
+            if fid not in cooldown_ids:
+                chosen = fid
+                break
+
+    # If the remaining unplayed queue is entirely inside the cooldown, use the
+    # oldest eligible item rather than failing the post.
+    if chosen is None:
+        chosen = lib["unplayed"][0]
+
     lib["unplayed"].remove(chosen)
     save_library(lib)
-    for t in lib["tracks"]:
-        if t["file_id"] == chosen:
-            return t
-    return {"file_id": chosen, "title": "بدون‌نام"}
-
+    return candidates_by_id.get(chosen) or {"file_id": chosen, "title": "بدون‌نام"}
 
 def consume_track(track):
     """Consume exactly one selected track from the current no-repeat cycle."""
