@@ -1,17 +1,15 @@
 """SilentRuins Owner Mode runtime hardening.
 
-V4.2 production safety/matching layer. It patches the legacy bot at startup so
-music selection has strong semantic matching, exploration/diversity, and a
-longer preview cooldown; audio analytics are recorded only after Telegram
-accepts the file; Pexels keeps the cinematic look without near-black images;
-and runtime data is directed to persistent Railway storage when available.
+V4.3 production layer: persistent Railway runtime data, safe/diverse music
+selection, post-send audio analytics, cinematic image selection, and the new
+editorial quality engine.
 """
 from __future__ import annotations
 
 import random
 from pathlib import Path
 
-GUARD_VERSION = "4.2.1-persistent-library"
+GUARD_VERSION = "4.3.0-quality-engine"
 
 
 def _patch_source(source: str) -> str:
@@ -24,8 +22,7 @@ _data_dir_env = os.getenv("DATA_DIR")
 DATA_DIR = Path(_data_dir_env or ("/data" if _railway else ".")).expanduser()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-# One-time migration: if a deployment already has runtime data in the project
-# directory, copy it into /data before the persistent store is opened.
+# Migrate an existing ephemeral runtime store once, before the bot opens it.
 if _railway and DATA_DIR.resolve() != Path(".").resolve():
     for _name in ("library.json", "state.json", "silentruins.db"):
         _src = Path(_name)
@@ -98,11 +95,10 @@ if _railway and DATA_DIR.resolve() != Path(".").resolve():
             pool = [t for t in tracks if t["file_id"] not in cooldown_ids]
         if not pool:
             pool = tracks[:]
-        if not pool:
-            return None
-
         ranked = sorted(pool, key=_selection_score, reverse=True)
-        if mood and ranked:
+        if not ranked:
+            return None
+        if mood:
             top_score = _selection_score(ranked[0])
             shortlist = [t for t in ranked if _selection_score(t) >= top_score - 0.13]
         else:
@@ -114,33 +110,20 @@ if _railway and DATA_DIR.resolve() != Path(".").resolve():
         save_state({"preview_recent_track_ids": preview_recent[-preview_window:]})
         return chosen
 
-    lib["unplayed"] = [
-        fid for fid in (lib.get("unplayed", []) or []) if fid in by_id
-    ]
+    lib["unplayed"] = [fid for fid in (lib.get("unplayed", []) or []) if fid in by_id]
     if not lib["unplayed"]:
-        eligible = [t for t in tracks if t["file_id"] not in cooldown_ids]
-        if not eligible:
-            eligible = tracks[:]
+        eligible = [t for t in tracks if t["file_id"] not in cooldown_ids] or tracks[:]
         lib["unplayed"] = [t["file_id"] for t in eligible]
         random.shuffle(lib["unplayed"])
 
     eligible_tracks = [by_id[fid] for fid in lib["unplayed"] if fid in by_id]
     if not eligible_tracks:
         return None
-
     ranked = sorted(eligible_tracks, key=_selection_score, reverse=True)
-    chosen = None
-    for track in ranked:
-        if track["file_id"] not in cooldown_ids:
-            chosen = track
-            break
-    if chosen is None:
-        chosen = ranked[0]
-
+    chosen = next((t for t in ranked if t["file_id"] not in cooldown_ids), ranked[0])
     chosen_id = chosen["file_id"]
-    if chosen_id in lib["unplayed"]:
-        lib["unplayed"].remove(chosen_id)
-        save_library(lib)
+    lib["unplayed"].remove(chosen_id)
+    save_library(lib)
     return chosen
 '''
     source = source[:start] + replacement + source[end:]
@@ -182,7 +165,7 @@ if _railway and DATA_DIR.resolve() != Path(".").resolve():
     source = source[:start] + replacement + source[end:]
 
     # ------------------------------------------------------------------
-    # Image picker: cinematic darkness without unusable near-black images.
+    # Image picker: dark and cinematic, but not unreadably black.
     # ------------------------------------------------------------------
     start = source.index("def _pick_dark_photo(photos, excluded_urls=None):")
     end = source.index("\n\ndef fetch_pexels_photo", start)
@@ -212,20 +195,26 @@ if _railway and DATA_DIR.resolve() != Path(".").resolve():
         elif lum > 125:
             readability *= 0.55
         score = readability * 0.82 + resolution * 0.18
-        scored.append((score, lum, photo))
+        scored.append((score, photo))
 
     if not scored:
         return None
     scored.sort(key=lambda item: item[0], reverse=True)
     top = scored[: min(8, len(scored))]
-    return random.choice(top)[2]
+    return random.choice(top)[1]
 '''
     source = source[:start] + replacement + source[end:]
-
     return source
 
 
 def main() -> None:
+    # Load the V4.3 engine before executing bot.py. The bot's existing import
+    # statement then receives the upgraded quality_score without changing its
+    # application code or preview/publish interface.
+    import content_engine
+    from quality_engine import quality_score as v43_quality_score
+    content_engine.quality_score = v43_quality_score
+
     source = Path("bot.py").read_text(encoding="utf-8")
     patched = _patch_source(source)
     compile(patched, "bot.py (Owner Mode patched)", "exec")
