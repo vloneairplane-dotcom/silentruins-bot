@@ -1,15 +1,16 @@
 """
 SilentRuins Bot 🥀 — Pro Edition
 --------------------------------
-ربات چنل‌های دپ/غمگین:
+ربات چنل‌های دپ/غمگین — هر پست یک «ستِ هم‌حس»:
 
-هر پست = متن ساده‌ی احساسی + استیکر + آهنگ (با اسم خواننده و ترک)
+    📸 عکس غمگین Pexels  ←  کپشن فارسی مرتبط با عکس  ←  🎭 استیکر  ←  🎧 آهنگ مرتبط
 
-- 📚 کتابخونه‌ی آهنگ: MP3 رو تو پیوی ربات می‌فرستی، ذخیره می‌شه و نوبتی پست می‌شه
-- 🎭 کتابخونه‌ی استیکر: استیکر موردعلاقه‌ات رو تو پیوی می‌فرستی، یا یه پک عمومی معرفی می‌کنی
-- 🔁 بدون تکرار: نه آهنگ تکراری می‌شه، نه کپشن — تا همه یک دور رد نشن
-- 👁 پیش‌نمایش: قبل از انتشار، نمونه‌ی پست رو تو پیوی خودت ببین (/preview)
-- 📸 پست‌ها: عکس Pexels + کپشن ساده + استیکر + آهنگ (بدون عکس: SEND_PHOTOS=false)
+- ۶ حس/موضوع: بارون، شب، تنهایی، دلتنگی، خستگی، ویرونه — عکس و متن از یک حس انتخاب می‌شن
+- آهنگ‌ها هم حس‌دارن: موقع ارسال MP3 تو کپشن بنویس rain/شب/بارون/… تا به همون حس وصل بشه
+- امضای آخر هر پست: — silent ruins 🥀
+- پنل مدیریت شیشه‌ای (دکمه‌ای) با /panel
+- بدون تکرار: نه آهنگ تکراری، نه کپشن تکراری (تا اتمام دور)
+- عکس خاموش هم می‌شه: SEND_PHOTOS=false → فقط متن + استیکر + آهنگ
 """
 
 import asyncio
@@ -26,9 +27,10 @@ from zoneinfo import ZoneInfo
 
 import requests
 from dotenv import load_dotenv
-from telegram import Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import (
     Application,
+    CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
@@ -38,7 +40,7 @@ from telegram.ext import (
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# Config — همه از متغیرهای محیطی (نمونه: env.example)
+# Config
 # ---------------------------------------------------------------------------
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
@@ -51,13 +53,9 @@ def _env_flag(name, default=False):
     )
 
 
-# حالت عکس‌دار (پیش‌فرض روشن — عکس + کپشن ساده + استیکر + آهنگ)
+# عکس‌دار بودن پست‌ها (پیش‌فرض روشن)
 SEND_PHOTOS = _env_flag("SEND_PHOTOS", True)
-
-# منشن آیدی چنل ته کپشن پست اصلی
-SHOW_CHANNEL_TAG = _env_flag("SHOW_CHANNEL_TAG", True)
-
-# نوشتن اسم عکاس ته کپشن عکس (پیش‌فرض خاموش — کپشن ساده می‌مونه)
+# اسم عکاس ته کپشن (پیش‌فرض خاموش — کپشن ساده می‌مونه)
 PHOTO_CREDIT = _env_flag("PHOTO_CREDIT", False)
 
 PEXELS_API_KEY = (
@@ -65,16 +63,12 @@ PEXELS_API_KEY = (
     or os.getenv("PIXEL_API_KEY")
     or os.getenv("UNSPLASH_ACCESS_KEY")
 )
-# اگه عکس روشنه ولی کلید نیست، کرش نمی‌کنیم؛ فقط موقتاً متنی کار می‌کنیم
 PHOTO_MODE = SEND_PHOTOS and bool(PEXELS_API_KEY)
 if SEND_PHOTOS and not PEXELS_API_KEY:
     logging.warning("⚠️ SEND_PHOTOS روشنه ولی PEXELS_API_KEY نیست — فعلاً فقط متن پست می‌شه")
 
-# پک استیکر عمومی تلگرام (اختیاری) — مثلاً STICKER_SET=SadHamster
-# اگه خالی باشه، فقط استیکرهایی که خودت تو پیوی می‌فرستی استفاده می‌شن
 STICKER_SET = (os.getenv("STICKER_SET") or "").strip()
 
-# ادمین‌ها: ADMIN_IDS (با کاما) یا ADMIN_USER_ID (تکی)
 _admin_raw = os.getenv("ADMIN_IDS") or os.getenv("ADMIN_USER_ID") or ""
 ADMIN_IDS = set()
 for part in str(_admin_raw).split(","):
@@ -84,7 +78,6 @@ for part in str(_admin_raw).split(","):
 if not ADMIN_IDS:
     logging.warning("⚠️ ADMIN_IDS تنظیم نشده — ربات به دستورات ادمین جواب نمی‌ده")
 
-# چنل: CHANNEL یا CHANNEL_ID (پابلیک با @ / پرایوت با آیدی عددی)
 _raw_channel = os.getenv("CHANNEL") or os.getenv("CHANNEL_ID") or ""
 if not _raw_channel:
     raise RuntimeError("❌ CHANNEL تنظیم نشده (مثل @songsandscars یا -100123...)")
@@ -100,7 +93,6 @@ try:
 except Exception:
     TIMEZONE = ZoneInfo("Asia/Tehran")
 
-# زمان‌بندی پست‌ها
 POST_TIMES_RAW = os.getenv("POST_TIMES") or os.getenv("PHOTO_TIMES") or "10:00,16:00,22:00,02:00"
 POST_TIMES = [t.strip() for t in POST_TIMES_RAW.split(",") if t.strip()]
 MUSIC_TIMES_RAW = os.getenv("MUSIC_TIMES", "")
@@ -112,7 +104,6 @@ try:
 except ValueError:
     POST_INTERVAL_HOURS = None
 
-# مسیر دیتای دائمی (روی Railway: Volume با Mount Path=/data و DATA_DIR=/data)
 DATA_DIR = Path(os.getenv("DATA_DIR", ".")).expanduser()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LIBRARY_FILE = DATA_DIR / "library.json"
@@ -121,117 +112,137 @@ MUSIC_DIR = DATA_DIR / "music"
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# محتوا: متن‌های فارسی طبیعی
+# محتوا — حس‌محور: عکس و متن از یک حس، آهنگ هم اگه تگ خورد از همون حس
 # ---------------------------------------------------------------------------
-# کوئری‌های عکس (فقط وقتی SEND_PHOTOS=true)
-SAD_QUERIES = [
-    "sad aesthetic", "depression dark aesthetic", "lonely girl night window",
-    "sad boy alone dark", "melancholy portrait", "dark moody aesthetic",
-    "broken heart aesthetic", "alone in dark room", "crying in rain aesthetic",
-    "rainy night alone", "empty room depression", "sad eyes close up",
-    "foggy lonely road night", "withered roses dark", "black and white sadness",
-    "gothic melancholy", "abandoned room dark", "loneliness aesthetic",
-    "sad girl black and white", "dark forest loneliness",
-    "cigarette smoke sad night", "empty bed sadness", "window rain night sad",
-    "depressed aesthetic girl", "moody dark portrait",
-]
+SIGNATURE = "— silent ruins 🥀"
 
-# متن‌های پست — رایج‌ترین حالت روزمره‌ی حس دپ. ویرایش/اضافه کن؛ ربات بدون تکرار می‌چرخه روشون.
-PERSIAN_SAD_CAPTIONS = [
-    "اینجا همه چی خوبه جز خودم... 🖤",
-    "یه وقتایی آدم دلش میخواد گم بشه، نه پیدا.",
-    "خسته‌ام از تظاهر به خوب بودن 🥀",
-    "بارون که میزنه، دلتنگی بیشتر میفهمه چیکار کنه.",
-    "بعضی شبا خوابم نمیبره، خاطره‌هات بیدارم نگه میدارن.",
-    "چقدر سخته وانمود کنی حالت خوبه وقتی نیست.",
-    "دلم یه جای دور میخواد، جایی که هیچکس نباشه.",
-    "همه رفتن، فقط جای خالیشون مونده.",
-    "یه وقتایی سکوت از هر فریادی بلندتره.",
-    "کاش میشد برگشت به روزایی که بی‌دلیل شاد بودیم.",
-    "من اونقدر قوی نیستم که نشون میدم.",
-    "تو شلوغی هم تنهام... 🖤",
-    "بعضی زخما هیچوقت خوب نمیشن، فقط عادت میکنی به دردشون.",
-    "دلم گرفته، نه از بارون، از خودم.",
-    "چقدر دلتنگم برای کسی که هیچوقت نفهمید.",
-    "شبا طولانی‌ترن وقتی کسی رو نداری بهش فکر کنی... یا داری و نیست.",
-    "خسته شدم از جنگیدن با خودم هر شب.",
-    "هیچی بدتر از این نیست که خودت مقصر حال بدت باشی.",
-    "یه روز میفهمی چقدر بی‌صدا شکستی.",
-    "دنیا قشنگه ولی نه برای همه.",
-    "بعضی آدما میان که تا ابد دلتنگت کنن و برن.",
-    "من خوبم، فقط یکم خسته‌ام، یکم شکسته‌ام، یکم...",
-    "کاش میشد یه بار دیگه بیخیال بود.",
-    "تنهایی قشنگ نیست، فقط عادت میشه.",
-    "دلم میخواد یه مدت هیچکس منو نشناسه.",
-    "همه میگن میگذره، ولی نمیگن چجوری میگذره.",
-    "یه وقتایی باید بذاری بره، حتی اگه هنوز دوسش داری.",
-    "من از اون آدمایی نیستم که زود فراموش کنن.",
-    "چشام خسته‌ان از بس به در خیره موندن.",
-    "غمگین ترین قسمت داستان اینه که عادت کردم به نبودنت.",
-    "کاش میشد به عقب برگشت و هیچوقت بعضیا رو نمیدیدیم.",
-    "بعضی شبا دلم میخواد هیچ صبحی نیاد.",
-    "دارم یاد میگیرم بدون تو ادامه بدم، ولی هنوز بلد نیستم.",
-    "حالم بده ولی به کسی نمیگم، چون کسی نمیفهمه.",
-    "یادته میگفتی همیشه میمونی؟",
-    "این روزا بیشتر با خودم حرف میزنم تا با بقیه.",
-    "دلم برای خودِ قدیمم تنگ شده.",
-    "چقدر زود دیر میشه...",
-    "از یه جایی به بعد فقط تحمل میکنی، زندگی نمیکنی.",
-    "خسته‌ام از این همه بغضِ نگفته.",
-    "کاش یکی بود میفهمید بی‌حرفی یعنی چی.",
-    "شب بخیر به کسی که هیچوقت شب بخیرم نگفت.",
-    "ما تموم شدیم ولی خاطره‌هامون نه.",
-    # --- دسته دوم: روزمره‌تر و طبیعی‌تر ---
-    "یه حسی میگه همه‌چیز دیر شده.",
-    "امشبم مثل دیروز گذشت.",
-    "کسی حالم رو نپرسید، منم نگفتم 🖤",
-    "چراغا خاموش، آهنگ پخش، فکرا روشن.",
-    "یه جایی وسط روز، بی‌دلیل دلتنگ شدم.",
-    "حرف زیاد داشتم؛ پس ندادم.",
-    "دیشب خوابم نبرد، فکرا سنگین بودن.",
-    "گاهی فقط یه آهنگ حالتو می‌فهمه.",
-    "ادامه می‌دم، ولی نه مثل قبل.",
-    "دلم یه بارونِ ساکت می‌خواد.",
-    "همه‌چی سر جاشه، جز من.",
-    "بعضی روزا فقط می‌گذرن؛ زندگی نمی‌شن.",
-    "صبح شد، ولی نه برام.",
-    "به دیشبم پیام دادم؛ خونده نشد.",
-    "ساعت سه‌ی شب و یه آهنگ تکراری.",
-    "بغضمو قورت دادم، رد شد.",
-    "هنوز منتظرم، نمیدونم چی.",
-    "مردم می‌رن؛ عادت دارم.",
-    "خنده‌هام امروز اجاره‌ای بودن.",
-    "خیلی وقته کسی نپرسیده خوبی؟",
-    "دلم برای روزای ساده تنگ شده.",
-    "یه نفس عمیق و ادامه.",
-    "هیچی نشد، مثل همیشه.",
-    "آدم گمشه‌ی خودشه بعضی روزا.",
-    "کاش زودتر می‌فهمیدم.",
-    "باشه، اشکالی نداره.",
-]
+MOODS = {
+    "rain": {
+        "fa": "بارون",
+        "emoji": "🌧",
+        "queries": [
+            "rain on window night", "rainy street night dark",
+            "rain drops glass sad", "heavy rain city lights",
+            "person umbrella rain dark", "rain window black and white",
+        ],
+        "captions": [
+            "بارون که میزنه، دلتنگی بیشتر میفهمه چیکار کنه.",
+            "دلم یه بارونِ ساکت می‌خواد.",
+            "هیچوقت از بارون نپرسیدن چرا می‌باره.",
+            "صدای بارون تنها چیزیه که شبهامو آروم می‌کنه.",
+            "بعضی خاطره‌ها مثل بارون‌ان؛ هر وقت بخوان، می‌بارن.",
+            "پشت پنجره نشستم. بارون داره حرفای منو می‌زنه.",
+            "شهر خیسه، خیالم خیس‌تر.",
+        ],
+    },
+    "night": {
+        "fa": "شب",
+        "emoji": "🌃",
+        "queries": [
+            "dark night city lights", "empty street night neon",
+            "night sky moon dark", "bedroom dark window night",
+            "midnight empty road", "city skyline dark night",
+        ],
+        "captions": [
+            "شبا طولانی‌ترن وقتی کسی رو نداری بهش فکر کنی... یا داری و نیست.",
+            "چراغا خاموش، آهنگ پخش، فکرا روشن.",
+            "ساعت سه‌ی شب و یه آهنگ تکراری.",
+            "بعضی شبا دلم میخواد هیچ صبحی نیاد.",
+            "شب که میشه، همه‌ی حرفای نگفته بیدار میشن.",
+            "ماهم بعضی شبا دلتنگه.",
+            "شهر خوابه، فکرام نه.",
+        ],
+    },
+    "lonely": {
+        "fa": "تنهایی",
+        "emoji": "🚶",
+        "queries": [
+            "alone dark room", "lonely person silhouette",
+            "empty bench fog", "person walking alone night",
+            "solitude dark aesthetic", "man sitting alone dark",
+        ],
+        "captions": [
+            "تنهایی قشنگ نیست، فقط عادت میشه.",
+            "تو شلوغی هم تنهام...",
+            "دلم میخواد یه مدت هیچکس منو نشناسه.",
+            "آدم گمشه‌ی خودشه بعضی روزا.",
+            "همه رفتن، فقط جای خالیشون مونده.",
+            "یه گوشه بنشین و فقط ساکت بمون.",
+            "کسی حالم رو نپرسید، منم نگفتم.",
+        ],
+    },
+    "love": {
+        "fa": "دلتنگی",
+        "emoji": "🥀",
+        "queries": [
+            "old photos memories", "withered roses dark",
+            "letter paper vintage dark", "empty bed sadness",
+            "red rose black background", "couple shadow far away",
+        ],
+        "captions": [
+            "یادته میگفتی همیشه میمونی؟",
+            "ما تموم شدیم ولی خاطره‌هامون نه.",
+            "غمگین‌ترین قسمت داستان اینه که عادت کردم به نبودنت.",
+            "بعضی آدما می‌رن ولی صداشون می‌مونه.",
+            "چقدر دلتنگم برای کسی که هیچوقت نفهمید.",
+            "یه وقتایی باید بذاری بره، حتی اگه هنوز دوسش داری.",
+            "رزا پژمردن، قول‌ها زودتر.",
+        ],
+    },
+    "tired": {
+        "fa": "خستگی",
+        "emoji": "🕯",
+        "queries": [
+            "tired person dark", "sad eyes close up",
+            "cigarette smoke night", "broken mirror dark",
+            "crying silhouette dark", "candle dark room",
+        ],
+        "captions": [
+            "خسته‌ام از تظاهر به خوب بودن.",
+            "من اونقدر قوی نیستم که نشون میدم.",
+            "خسته شدم از جنگیدن با خودم هر شب.",
+            "یه روز میفهمی چقدر بی‌صدا شکستی.",
+            "از یه جایی به بعد فقط تحمل می‌کنی، زندگی نمی‌کنی.",
+            "بغضمو قورت دادم، رد شد.",
+            "خنده‌هام امروز اجاره‌ای بودن.",
+        ],
+    },
+    "ruins": {
+        "fa": "ویرونه",
+        "emoji": "🏚",
+        "queries": [
+            "abandoned house dark", "foggy forest path",
+            "old ruins fog", "misty mountains dark",
+            "gothic architecture dark", "abandoned building night",
+        ],
+        "captions": [
+            "هر خرابه‌ای یه روزی خونه‌ی کسی بوده.",
+            "مه چیزی رو قایم نمی‌کنه؛ فقط نگهش می‌داره.",
+            "تو دلِ همه‌مون یه ویرونه هست که کسی ندیده.",
+            "یه جاهایی هست که هنوز بوی خاطره می‌دن.",
+            "دیوارای قدیمی بیشترین رازا رو نگه داشتن.",
+            "سکوت اینجا صدا داره.",
+            "ویرونه‌ها هم یه روزی پر از زندگی بودن.",
+        ],
+    },
+}
 
-# خط‌های کوتاهی که گاهی ته کپشن آهنگ می‌آد
-MUSIC_LINES = [
-    "🎧 صداشو زیاد کن.",
-    "این یکی برای نیمه‌شب‌ست.",
-    "یه گوشه بنشین و فقط گوش بده.",
-    "پلی بشه 🖤",
-    "هر هرکی حالته، این آهنگ می‌فهمه.",
-    "تکرارش کن، لازم داری.",
-    "وقتی همه خوابن، این پخش بشه.",
-    "بذارش رو ریپیت.",
-    "یه آهنگ از طرف من برای این شبِ سرد.",
-    "قشنگه، نه؟",
-]
-
-HASHTAGS = ["#غمگین", "#دپ", "#دلتنگی", "#شب_بخیر", "#تنهایی"]
+# برای تگ کردن آهنگ‌ها تو کپشن MP3 (فارسی، انگلیسی یا فینگلیش)
+MOOD_ALIASES = {
+    "rain": ["rain", "بارون", "باران", "barun", "baran", "baroon"],
+    "night": ["night", "شب", "shab"],
+    "lonely": ["lonely", "تنها", "tanha", "tanhai"],
+    "love": ["love", "دلتنگ", "عشق", "خاطره", "deltang", "eshgh", "khatere"],
+    "tired": ["tired", "خسته", "خستگ", "khaste", "khasste"],
+    "ruins": ["ruins", "ویرونه", "خرابه", "جنگل", "مه", "virane", "kharabe", "jangal"],
+}
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger("silent_ruins_bot")
 
 
 # ---------------------------------------------------------------------------
-# Health server (برای هاست‌هایی که پورت می‌خوان مثل Render)
+# Health server (برای هاست‌هایی مثل Render)
 # ---------------------------------------------------------------------------
 def _run_health_server():
     port = int(os.environ.get("PORT", "10000"))
@@ -255,13 +266,12 @@ def _run_health_server():
 # ذخیره‌سازی
 # ---------------------------------------------------------------------------
 def load_library():
+    data = {}
     if LIBRARY_FILE.exists():
         try:
             data = json.loads(LIBRARY_FILE.read_text(encoding="utf-8"))
         except Exception:
             data = {}
-    else:
-        data = {}
     data.setdefault("tracks", [])
     data.setdefault("unplayed", [])
     data.setdefault("stickers", [])
@@ -278,7 +288,7 @@ def load_state():
             return json.loads(STATE_FILE.read_text(encoding="utf-8"))
         except Exception:
             pass
-    return {"is_paused": False, "post_count": 0, "last_query": None}
+    return {"is_paused": False, "post_count": 0}
 
 
 def save_state(patch):
@@ -292,33 +302,32 @@ def is_admin(update: Update) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# کپشن پست اصلی — بدون تکرار تا اتمام همه
+# کپشن — از همان حسِ عکس، بدون تکرار (per-mood)
 # ---------------------------------------------------------------------------
-def pick_caption_line():
+def pick_caption(mood):
+    pool = MOODS[mood]["captions"]
     state = load_state()
-    used = set(state.get("caption_used", []))
-    all_idx = list(range(len(PERSIAN_SAD_CAPTIONS)))
-    remaining = [i for i in all_idx if i not in used]
+    used_map = state.get("caption_used", {})
+    if not isinstance(used_map, dict):  # سازگاری با فرمت قدیمی
+        used_map = {}
+    used = set(used_map.get(mood, []))
+    remaining = [i for i in range(len(pool)) if i not in used]
     if not remaining:
         used = set()
-        remaining = all_idx
+        remaining = list(range(len(pool)))
     idx = random.choice(remaining)
     used.add(idx)
-    save_state({"caption_used": sorted(used)})
-    return PERSIAN_SAD_CAPTIONS[idx]
+    used_map[mood] = sorted(used)
+    save_state({"caption_used": used_map})
+    return pool[idx]
 
 
-def build_caption():
-    parts = [pick_caption_line()]
-    if random.random() < 0.30:  # گاهی هشتگ، که طبیعی‌تر بشه
-        parts.append(" ".join(random.sample(HASHTAGS, k=random.randint(1, 2))))
-    if SHOW_CHANNEL_TAG and isinstance(CHANNEL_ID, str) and CHANNEL_ID.startswith("@"):
-        parts.append(CHANNEL_ID)
-    return "\n".join(parts)
+def build_main_caption(mood):
+    return f"{pick_caption(mood)}\n\n{SIGNATURE}"
 
 
 # ---------------------------------------------------------------------------
-# استیکر: کتابخونه (پیوی) + پک عمومی اختیاری
+# استیکر
 # ---------------------------------------------------------------------------
 def _pack_stickers():
     return load_state().get("pack_stickers", [])
@@ -334,8 +343,7 @@ def remove_sticker(file_id):
     if any(s["file_id"] == file_id for s in lib["stickers"]):
         lib["stickers"] = [s for s in lib["stickers"] if s["file_id"] != file_id]
         save_library(lib)
-    pack = [f for f in _pack_stickers() if f != file_id]
-    save_state({"pack_stickers": pack})
+    save_state({"pack_stickers": [f for f in _pack_stickers() if f != file_id]})
 
 
 async def send_random_sticker(context, chat_id, reply_to=None):
@@ -360,7 +368,6 @@ async def send_random_sticker(context, chat_id, reply_to=None):
 
 
 async def refresh_sticker_pack(context: ContextTypes.DEFAULT_TYPE):
-    """File_idهای یه پک عمومی رو یه بار می‌گیره و کش می‌کنه."""
     if not STICKER_SET:
         return
     try:
@@ -373,26 +380,40 @@ async def refresh_sticker_pack(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
-# آهنگ: کتابخونه‌ی بدون تکرار + کپشن خواننده/ترک
+# آهنگ — چرخه‌ی بدون تکرار + اولویتِ آهنگِ هم‌حس با عکس
 # ---------------------------------------------------------------------------
-def get_next_track(peek=False):
-    """آهنگ بعدی چرخه‌ی بدون‌تکرار. peek=True فقط نگاه می‌کنه (برای پیش‌نمایش)."""
+def get_next_track(mood=None, peek=False):
     lib = load_library()
     if not lib["tracks"]:
         return None
+
     if peek:
+        # برای پیش‌نمایش: چیزی مصرف نمی‌شه
+        if mood:
+            same_mood = [t for t in lib["tracks"] if t.get("mood") == mood]
+            if same_mood:
+                return random.choice(same_mood)
         return random.choice(lib["tracks"])
 
     if not lib["unplayed"]:
         lib["unplayed"] = [t["file_id"] for t in lib["tracks"]]
         random.shuffle(lib["unplayed"])
 
-    next_file_id = lib["unplayed"].pop(0)
+    # اولویت با آهنگِ هم‌حس عکس (بدون شکستن قانون عدم تکرار)
+    chosen = lib["unplayed"][0]
+    if mood:
+        mood_by_id = {t["file_id"]: t.get("mood") for t in lib["tracks"]}
+        for fid in lib["unplayed"]:
+            if mood_by_id.get(fid) == mood:
+                chosen = fid
+                break
+
+    lib["unplayed"].remove(chosen)
     save_library(lib)
     for t in lib["tracks"]:
-        if t["file_id"] == next_file_id:
+        if t["file_id"] == chosen:
             return t
-    return {"file_id": next_file_id, "title": "بدون‌نام"}
+    return {"file_id": chosen, "title": "بدون‌نام"}
 
 
 def build_audio_caption(track):
@@ -402,16 +423,14 @@ def build_audio_caption(track):
     if performer:
         lines.append(f"🎤 {performer}")
     lines.append(f"🎵 {title}")
-    if random.random() < 0.45:
-        lines.append("")
-        lines.append(random.choice(MUSIC_LINES))
+    lines.append("")
+    lines.append(SIGNATURE)
     return "\n".join(lines)
 
 
 async def send_track(context, chat_id, track, reply_to=None):
     caption = build_audio_caption(track)
     file_path = track.get("file_path")
-    # اگه فایل روی دیسک هست → دوباره آپلود می‌کنیم که title/performer هم ست بشن
     if file_path and Path(file_path).exists():
         with open(file_path, "rb") as f:
             return await context.bot.send_audio(
@@ -431,14 +450,12 @@ async def send_track(context, chat_id, track, reply_to=None):
 
 
 def delete_track_by_number(n):
-    """حذف آهنگ شماره‌ی n (۱-مبنا). خروجی: دیکشنری آهنگ یا None"""
     lib = load_library()
     if n < 1 or n > len(lib["tracks"]):
         return None
     removed = lib["tracks"].pop(n - 1)
     lib["unplayed"] = [f for f in lib["unplayed"] if f != removed["file_id"]]
     save_library(lib)
-    # فایل دیسکی رو هم پاک کن (اگه هست)
     fp = removed.get("file_path")
     if fp:
         try:
@@ -449,12 +466,13 @@ def delete_track_by_number(n):
 
 
 # ---------------------------------------------------------------------------
-# Pexels (فقط حالت SEND_PHOTOS)
+# Pexels — کوئری از همان حس
 # ---------------------------------------------------------------------------
-def fetch_pexels_photo():
-    for attempt in range(5):
-        query = random.choice(SAD_QUERIES)
-        page = random.randint(1, 10)
+def fetch_pexels_photo(mood):
+    queries = MOODS[mood]["queries"]
+    for attempt in range(6):
+        query = random.choice(queries) if attempt < 4 else "dark moody aesthetic"
+        page = random.randint(1, 10) if attempt % 2 == 0 else 1
         try:
             resp = requests.get(
                 "https://api.pexels.com/v1/search",
@@ -492,15 +510,17 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
 
 
 async def publish_post(context, chat_id, consume_music=True):
-    """ست کامل پست: متن (+عکس اگه SEND_PHOTOS فعاله) + استیکر + آهنگ.
-    خروجی: دیکشنری وضعیت."""
-    result = {"posted": False, "music": False, "sticker": False}
+    """ست کامل پست: عکس/متن (هم‌حس) + استیکر + آهنگ (ترجیحاً هم‌حس)."""
+    result = {"posted": False, "music": False, "sticker": False, "mood": None}
 
-    caption = build_caption()
+    mood = random.choice(list(MOODS.keys()))
+    result["mood"] = mood
+    caption = build_main_caption(mood)
+
     if PHOTO_MODE:
-        url, photographer, query = await asyncio.to_thread(fetch_pexels_photo)
+        url, photographer, query = await asyncio.to_thread(fetch_pexels_photo, mood)
         if PHOTO_CREDIT:
-            caption = f"{caption}\n\n📷 {photographer}"
+            caption = f"{caption}\n📷 {photographer}"
         main_msg = await context.bot.send_photo(chat_id=chat_id, photo=url, caption=caption)
     else:
         main_msg = await context.bot.send_message(chat_id=chat_id, text=caption)
@@ -509,11 +529,13 @@ async def publish_post(context, chat_id, consume_music=True):
     if await send_random_sticker(context, chat_id, reply_to=main_msg.message_id):
         result["sticker"] = True
 
-    track = get_next_track(peek=not consume_music)
+    track = get_next_track(mood=mood, peek=not consume_music)
     if track:
         await send_track(context, chat_id, track, reply_to=main_msg.message_id)
         result["music"] = True
 
+    if consume_music:
+        save_state({"last_mood": mood})
     return result
 
 
@@ -526,7 +548,7 @@ async def post_combined_job(context: ContextTypes.DEFAULT_TYPE):
         result = await publish_post(context, CHANNEL_ID)
         save_state({"post_count": state.get("post_count", 0) + 1})
         logger.info(f"Post published: {result}")
-        if not result["music"] and random.random() < 0.15:
+        if not result["music"] and random.random() < 0.2:
             await notify_admins(
                 context,
                 "🎵 کتابخونه‌ی آهنگ خالیه! MP3 تو پیوی برام بفرست تا به پست‌ها اضافه بشه.",
@@ -534,25 +556,34 @@ async def post_combined_job(context: ContextTypes.DEFAULT_TYPE):
         return result
     except Exception as e:
         logger.exception("Post job failed")
-        await notify_admins(
-            context,
-            f"⚠️ پست خودکار خطا داد: {e}\n(چک کن ربات ادمین چنل باشه)",
-        )
+        await notify_admins(context, f"⚠️ پست خودکار خطا داد: {e}\n(چک کن ربات ادمین چنل باشه)")
         return False
 
 
-# جاب‌های قدیمی سازگاری
+def _post_result_text(result):
+    if not result or not result.get("posted"):
+        return "❌ پست نشد — چک کن ربات ادمین چنل باشه."
+    mood = result["mood"]
+    mood_fa = f"{MOODS[mood]['fa']} {MOODS[mood]['emoji']}" if mood else "؟"
+    bits = ["عکس" if PHOTO_MODE else "متن"]
+    if result["sticker"]:
+        bits.append("استیکر")
+    bits.append("آهنگ" if result["music"] else "بدون آهنگ (کتابخونه خالیه)")
+    return f"✅ پست شد — حس: {mood_fa}\n{' + '.join(bits)}"
+
+
+# جاب‌های سازگاری قدیمی
 async def post_photo_only_job(context: ContextTypes.DEFAULT_TYPE):
     if load_state().get("is_paused"):
         return
     if not PEXELS_API_KEY:
         await notify_admins(context, "برای پست عکس PEXELS_API_KEY لازمه.")
         return
+    mood = random.choice(list(MOODS.keys()))
     try:
-        url, photographer, query = await asyncio.to_thread(fetch_pexels_photo)
-        caption = f"{build_caption()}\n\n📷 {photographer} / Pexels"
-        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=url, caption=caption)
-        save_state({"post_count": load_state().get("post_count", 0) + 1})
+        url, photographer, query = await asyncio.to_thread(fetch_pexels_photo, mood)
+        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=url, caption=build_main_caption(mood))
+        save_state({"post_count": load_state().get("post_count", 0) + 1, "last_mood": mood})
     except Exception as e:
         logger.exception("post_photo_only_job failed")
         await notify_admins(context, f"⚠️ خطا در پست عکس: {e}")
@@ -561,7 +592,7 @@ async def post_photo_only_job(context: ContextTypes.DEFAULT_TYPE):
 async def post_music_only_job(context: ContextTypes.DEFAULT_TYPE):
     if load_state().get("is_paused"):
         return
-    track = get_next_track()
+    track = get_next_track(mood=load_state().get("last_mood"))
     if not track:
         await notify_admins(context, "🎵 کتابخونه‌ی آهنگ خالیه.")
         return
@@ -573,33 +604,172 @@ async def post_music_only_job(context: ContextTypes.DEFAULT_TYPE):
 
 
 # ---------------------------------------------------------------------------
+# متن‌ها (مشترک دستورات و پنل)
+# ---------------------------------------------------------------------------
+def _stats_text(context=None):
+    lib = load_library()
+    state = load_state()
+    tagged = len([t for t in lib["tracks"] if t.get("mood")])
+    last_mood = state.get("last_mood")
+    lines = [
+        "📊 آمار Silent Ruins 🥀",
+        "",
+        f"📢 چنل: {CHANNEL_ID}",
+        f"⏯ وضعیت: {'⏸ متوقف' if state.get('is_paused') else '▶️ فعال'}",
+        f"📮 پست‌ها: {state.get('post_count', 0)}",
+        f"🧩 حالت: {'📸 عکس + متن' if PHOTO_MODE else '📝 متن ساده'} + 🎭 + 🎧",
+        f"🌗 آخرین حس: {MOODS[last_mood]['fa']} {MOODS[last_mood]['emoji']}" if last_mood else "",
+        f"🎵 آهنگ‌ها: {len(lib['tracks'])} (حس‌دار: {tagged}؛ تو چرخه: {len(lib['unplayed'])})",
+        f"🎭 استیکرها: {len(lib['stickers']) + len(_pack_stickers())}",
+    ]
+    lines = [l for l in lines if l]
+    if POST_INTERVAL_HOURS:
+        lines.append(f"⏰ هر {POST_INTERVAL_HOURS} ساعت")
+    else:
+        lines.append(f"⏰ {', '.join(POST_TIMES)} ({TIMEZONE_STR})")
+    if context is not None:
+        try:
+            jobs = [j for j in context.application.job_queue.jobs() if j.next_t]
+            if jobs:
+                nxt = min(j.next_t for j in jobs).astimezone(TIMEZONE)
+                lines.append(f"⏭ پست بعدی: {nxt.strftime('%Y-%m-%d %H:%M')}")
+        except Exception:
+            pass
+    return "\n".join(lines)
+
+
+def _songs_text():
+    lib = load_library()
+    if not lib["tracks"]:
+        return "🎵 کتابخونه خالیه. یه MP3 برام بفرست 🥀"
+    total = len(lib["tracks"])
+    start_idx = max(0, total - 30)
+    lines = ["🎵 آهنگ‌های کتابخونه:\n"]
+    for i in range(start_idx, total):
+        t = lib["tracks"][i]
+        performer = f" — {t['performer']}" if t.get("performer") else ""
+        mood = f" [{MOODS[t['mood']]['fa']}]" if t.get("mood") in MOODS else ""
+        lines.append(f"{i+1}. {(t.get('title') or 'بدون‌نام')[:35]}{performer}{mood}")
+    if start_idx > 0:
+        lines.append(f"\n… {start_idx} تای اول نمایش داده نشدن")
+    lines.append("\nحذف: /del شماره")
+    return "\n".join(lines)
+
+
+def _stickers_text():
+    lib = load_library()
+    return (
+        "🎭 کتابخونه‌ی استیکر:\n\n"
+        f"• فرستاده‌شده توسط تو: {len(lib['stickers'])}\n"
+        f"• از پک {STICKER_SET or '—'}: {len(_pack_stickers())}\n\n"
+        "استیکر رو همینجا بفرست تا اضافه بشه؛ یا STICKER_SET رو به اسم یه پک عمومی ست کن."
+    )
+
+
+_MOODS_FA = "، ".join(m["fa"] + " " + m["emoji"] for m in MOODS.values())
+
+HELP_TEXT = (
+    "سلام! Silent Ruins 🥀\n\n"
+    "هر پست یه ستِ هم‌حسه: عکس دپ ← کپشن مرتبط ← استیکر ← آهنگ مرتبط\n"
+    f"حس‌ها: {_MOODS_FA}\n\n"
+    "➕ آهنگ: MP3 رو اینجا بفرست (می‌تونی موقع ارسال تو کپشن حسش رو هم بنویسی: "
+    "بارون / شب / تنهایی / دلتنگی / خستگی / ویرونه)\n"
+    "➕ استیکر: استیکر رو همینجا بفرست\n\n"
+    "دستورات:\n"
+    "/panel — پنل شیشه‌ای مدیریت 🎛\n"
+    "/post پست فوری • /preview پیش‌نمایش\n"
+    "/songs آهنگ‌ها • /del حذف • /stickers استیکرها\n"
+    "/pause توقف • /resume ادامه • /stats آمار • /id آیدی"
+)
+
+
+# ---------------------------------------------------------------------------
+# پنل شیشه‌ای
+# ---------------------------------------------------------------------------
+def _panel_text():
+    state = load_state()
+    lib = load_library()
+    return (
+        "🎛 پنل مدیریت Silent Ruins 🥀\n"
+        "— — — — — — — — —\n"
+        f"📢 {CHANNEL_ID}\n"
+        f"{'⏸ متوقفه' if state.get('is_paused') else '▶️ فعاله'}  •  📮 {state.get('post_count', 0)} پست\n"
+        f"🎵 {len(lib['tracks'])} آهنگ  •  🎭 {len(lib['stickers']) + len(_pack_stickers())} استیکر\n"
+        "— — — — — — — — —"
+    )
+
+
+def _panel_markup():
+    paused = load_state().get("is_paused")
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🥀 پست فوری", callback_data="p:post")],
+        [InlineKeyboardButton("👁 پیش‌نمایش", callback_data="p:preview")],
+        [
+            InlineKeyboardButton("📊 آمار", callback_data="p:stats"),
+            InlineKeyboardButton("🎵 آهنگ‌ها", callback_data="p:songs"),
+            InlineKeyboardButton("🎭 استیکر", callback_data="p:stickers"),
+        ],
+        [
+            InlineKeyboardButton(
+                "▶️ ادامه‌ی پست خودکار" if paused else "⏸ توقف پست خودکار",
+                callback_data="p:resume" if paused else "p:pause",
+            )
+        ],
+    ])
+
+
+async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    await update.message.reply_text(_panel_text(), reply_markup=_panel_markup())
+
+
+async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if not q or not q.from_user or q.from_user.id not in ADMIN_IDS:
+        if q:
+            await q.answer("فقط ادمینه 🥀", show_alert=True)
+        return
+    data = q.data or ""
+
+    if data in ("p:pause", "p:resume"):
+        save_state({"is_paused": data == "p:pause"})
+        await q.answer("⏸ متوقف شد" if data == "p:pause" else "▶️ فعال شد")
+        try:
+            await q.edit_message_text(_panel_text(), reply_markup=_panel_markup())
+        except Exception:
+            pass
+    elif data == "p:stats":
+        await q.answer()
+        await q.message.reply_text(_stats_text(context))
+    elif data == "p:songs":
+        await q.answer()
+        await q.message.reply_text(_songs_text())
+    elif data == "p:stickers":
+        await q.answer()
+        await q.message.reply_text(_stickers_text())
+    elif data == "p:preview":
+        await q.answer("👁 داره ساخته می‌شه…")
+        try:
+            result = await publish_post(context, q.message.chat_id, consume_music=False)
+            if not result["music"]:
+                await q.message.reply_text("🎵 کتابخونه‌ی آهنگ خالیه — MP3 بفرست.")
+        except Exception as e:
+            await q.message.reply_text(f"❌ خطا تو پیش‌نمایش: {e}")
+    elif data == "p:post":
+        await q.answer("⏳ در حال انتشار…")
+        result = await post_combined_job(context)
+        await q.message.reply_text(_post_result_text(result))
+
+
+# ---------------------------------------------------------------------------
 # دستورات
 # ---------------------------------------------------------------------------
 async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
-        await update.message.reply_text(
-            "سلام 🥀\nاین ربات شخصیه و دستوراتش فقط برای ادمینه."
-        )
+        await update.message.reply_text("این ربات شخصیه 🥀")
         return
-    mode = "📸 عکس + متن" if PHOTO_MODE else "📝 متن ساده"
-    await update.message.reply_text(
-        "سلام! Silent Ruins 🥀 روشنه.\n\n"
-        f"حالت پست: {mode} + 🎭 استیکر + 🎧 آهنگ\n"
-        f"چنل: {CHANNEL_ID}\n\n"
-        "📋 دستورات:\n"
-        "/post — پست فوری کامل\n"
-        "/preview — پیش‌نمایش پست، فقط برای خودت (بدون انتشار و بدون سوختن نوبت آهنگ)\n"
-        "/songs — لیست آهنگ‌ها\n"
-        "/del <شماره> — حذف یه آهنگ\n"
-        "/stickers — وضعیت کتابخونه‌ی استیکر\n"
-        "/pause — توقف پست خودکار\n"
-        "/resume — ادامه\n"
-        "/stats — آمار کامل\n"
-        "/id — آیدی عددی خودت\n\n"
-        "➕ افزودن آهنگ: فایل MP3 رو همینجا بفرست (اسم خواننده و ترک از خود فایل خونده می‌شه)\n"
-        "➕ افزودن استیکر: استیکر رو همینجا بفرست\n\n"
-        f"⏰ پست‌های خودکار: {', '.join(POST_TIMES) if POST_INTERVAL_HOURS is None else f'هر {POST_INTERVAL_HOURS} ساعت'} ({TIMEZONE_STR})"
-    )
+    await update.message.reply_text(HELP_TEXT)
 
 
 async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -610,34 +780,23 @@ async def id_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    m = await update.message.reply_text("⏳ دارم پست رو آماده می‌کنم...")
+    m = await update.message.reply_text("⏳ در حال آماده‌سازی پست…")
     result = await post_combined_job(context)
-    if result and result.get("posted"):
-        bits = []
-        if PHOTO_MODE:
-            bits.append("عکس")
-        else:
-            bits.append("متن")
-        if result["sticker"]:
-            bits.append("استیکر")
-        bits.append("آهنگ" if result["music"] else "❌ آهنگ نبود")
-        await m.edit_text(f"✅ پست شد ({' + '.join(bits)})")
-    else:
-        await m.edit_text("❌ پست نشد — جزئیات خطا رو همینجا برات فرستادم. چک کن ربات ادمین چنل باشه.")
+    await m.edit_text(_post_result_text(result))
 
 
 async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    await update.message.reply_text(
-        "👁 پیش‌نمایش پست بعدی (هیچی تو چنل نمی‌ره و نوبت آهنگ هم نمی‌سوزه):"
-    )
+    await update.message.reply_text("👁 پیش‌نمایش (تو چنل نمی‌ره، نوبت آهنگ هم نمی‌سوزه):")
     try:
         result = await publish_post(context, update.effective_chat.id, consume_music=False)
+        mood = result["mood"]
+        await update.message.reply_text(f"🌗 حس این پست: {MOODS[mood]['fa']} {MOODS[mood]['emoji']}")
         if not result["music"]:
-            await update.message.reply_text("🎵 کتابخونه‌ی آهنگ خالیه — MP3 بفرست تا تو پست‌ها باشه.")
+            await update.message.reply_text("🎵 کتابخونه‌ی آهنگ خالیه — MP3 بفرست.")
         if not result["sticker"]:
-            await update.message.reply_text("🎭 استیکری نداری — تو پیوی استیکر بفرست یا STICKER_SET ست کن.")
+            await update.message.reply_text("🎭 استیکری نداری — بفرست یا STICKER_SET ست کن.")
     except Exception as e:
         await update.message.reply_text(f"❌ خطا تو پیش‌نمایش: {e}")
 
@@ -665,59 +824,19 @@ async def resume_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
     save_state({"is_paused": False})
-    await update.message.reply_text("▶️ پست‌های خودکار دوباره فعال شد.")
+    await update.message.reply_text("▶️ پست‌های خودکار فعال شد.")
 
 
 async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    lib = load_library()
-    state = load_state()
-    mode = "📸 عکس + متن" if PHOTO_MODE else "📝 متن ساده"
-    lines = [
-        "📊 آمار Silent Ruins 🥀",
-        "",
-        f"📢 چنل: {CHANNEL_ID}",
-        f"🧩 حالت پست: {mode} + استیکر + آهنگ",
-        f"⏯ وضعیت: {'⏸ متوقف' if state.get('is_paused') else '▶️ فعال'}",
-        f"📮 پست‌های منتشرشده: {state.get('post_count', 0)}",
-        f"📝 کپشن‌ها: {len(state.get('caption_used', []))}/{len(PERSIAN_SAD_CAPTIONS)} استفاده‌شده",
-        "",
-        f"🎵 آهنگ‌ها: {len(lib['tracks'])} (تو چرخه: {len(lib['unplayed'])})",
-        f"🎭 استیکرها: {len(lib['stickers'])} داخل کتابخونه + {len(_pack_stickers())} از پک",
-    ]
-    if POST_INTERVAL_HOURS:
-        lines.append(f"⏰ زمان‌بندی: هر {POST_INTERVAL_HOURS} ساعت")
-    else:
-        lines.append(f"⏰ زمان‌بندی: {', '.join(POST_TIMES)} ({TIMEZONE_STR})")
-    try:
-        jobs = [j for j in context.application.job_queue.jobs() if j.next_t]
-        if jobs:
-            nxt = min(j.next_t for j in jobs).astimezone(TIMEZONE)
-            lines.append(f"⏭ پست بعدی: {nxt.strftime('%Y-%m-%d %H:%M')}")
-    except Exception:
-        pass
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(_stats_text(context))
 
 
 async def songs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    lib = load_library()
-    if not lib["tracks"]:
-        await update.message.reply_text("🎵 کتابخونه خالیه. یه فایل MP3 برام بفرست.")
-        return
-    total = len(lib["tracks"])
-    start_idx = max(0, total - 30)
-    lines = ["🎵 آهنگ‌های کتابخونه:\n"]
-    for i in range(start_idx, total):
-        t = lib["tracks"][i]
-        performer = f" — {t['performer']}" if t.get("performer") else ""
-        lines.append(f"{i+1}. {(t.get('title') or 'بدون‌نام')[:40]}{performer}")
-    if start_idx > 0:
-        lines.append(f"\n… {start_idx} تای اول نمایش داده نشدن")
-    lines.append("\nبرای حذف: /del شماره")
-    await update.message.reply_text("\n".join(lines))
+    await update.message.reply_text(_songs_text())
 
 
 async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -736,38 +855,20 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def stickers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    lib = load_library()
-    await update.message.reply_text(
-        f"🎭 کتابخونه‌ی استیکر:\n\n"
-        f"• فرستاده‌شده توسط تو: {len(lib['stickers'])}\n"
-        f"• از پک {STICKER_SET or '—'}: {len(_pack_stickers())}\n\n"
-        "برای اضافه کردن، استیکر رو همینجا (پیوی) بفرست.\n"
-        "برای پک عمومی، متغیر STICKER_SET رو به اسم پک ست کن."
-    )
-
-
-async def panel_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    state = load_state()
-    lib = load_library()
-    await update.message.reply_text(
-        f"🎛 پنل مدیریت Silent Ruins 🥀\n\n"
-        f"📢 چنل: {CHANNEL_ID}\n"
-        f"وضعیت: {'⏸ متوقف' if state.get('is_paused') else '▶️ فعال'}\n"
-        f"پست‌ها: {state.get('post_count', 0)} | آهنگ‌ها: {len(lib['tracks'])} | استیکرها: {len(lib['stickers']) + len(_pack_stickers())}\n\n"
-        f"/post پست فوری\n"
-        f"/preview پیش‌نمایش (فقط برای خودت)\n"
-        f"/songs لیست آهنگ‌ها | /del حذف\n"
-        f"/stickers وضعیت استیکرها\n"
-        f"/pause /resume کنترل خودکار\n"
-        f"/stats آمار کامل"
-    )
+    await update.message.reply_text(_stickers_text())
 
 
 # ---------------------------------------------------------------------------
-# دریافت آهنگ و استیکر در پیوی
+# دریافت آهنگ و استیکر
 # ---------------------------------------------------------------------------
+def _detect_mood(text):
+    text = (text or "").lower()
+    for key, aliases in MOOD_ALIASES.items():
+        if any(a in text for a in aliases):
+            return key
+    return None
+
+
 async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
@@ -799,12 +900,15 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         return
 
-    # کپشن به صورت «خواننده - ترک» هم پشتیبانی می‌شه
-    if msg.caption and "-" in msg.caption and not performer:
-        parts = [p.strip() for p in msg.caption.split("-", 1)]
-        if parts[0]:
+    caption_text = msg.caption or ""
+    mood = _detect_mood(caption_text)
+
+    # کپشن «خواننده - ترک»
+    if caption_text and "-" in caption_text and not performer:
+        parts = [p.strip() for p in caption_text.split("-", 1)]
+        if parts[0] and not _detect_mood(parts[0]):
             performer = parts[0]
-        if len(parts) > 1 and parts[1]:
+        if len(parts) > 1 and parts[1] and not _detect_mood(parts[1]):
             title = parts[1]
 
     title = (title or "بدون‌نام").strip()
@@ -828,6 +932,7 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "file_id": media.file_id,
             "title": title,
             "performer": performer,
+            "mood": mood,
             "file_path": str(dest_path),
             "added_at": int(time_module.time()),
         })
@@ -835,10 +940,11 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         save_library(lib)
 
         pr_line = f"🎤 {performer}\n" if performer else ""
+        mood_line = f"🌗 حس: {MOODS[mood]['fa']} {MOODS[mood]['emoji']}\n" if mood else ""
         await update.message.reply_text(
-            f"✅ ذخیره شد!\n{pr_line}🎵 {title}\n📚 کل کتابخونه: {len(lib['tracks'])} آهنگ"
+            f"✅ ذخیره شد!\n{pr_line}🎵 {title}\n{mood_line}📚 {len(lib['tracks'])} آهنگ"
         )
-        logger.info(f"Saved track: {performer} - {title} -> {dest_path}")
+        logger.info(f"Saved track: {performer} - {title} (mood={mood}) -> {dest_path}")
     except Exception as e:
         logger.exception("Failed to save audio")
         await update.message.reply_text(f"❌ خطا در ذخیره آهنگ: {e}")
@@ -874,7 +980,9 @@ def main():
     app.add_handler(CommandHandler("post", post_cmd))
     app.add_handler(CommandHandler("preview", preview_cmd))
     app.add_handler(CommandHandler("photo", photo_cmd))
+    app.add_handler(CommandHandler("photo_now", photo_cmd))  # legacy
     app.add_handler(CommandHandler("music", music_cmd))
+    app.add_handler(CommandHandler("music_now", music_cmd))  # legacy
     app.add_handler(CommandHandler("pause", pause_cmd))
     app.add_handler(CommandHandler("resume", resume_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
@@ -883,6 +991,7 @@ def main():
     app.add_handler(CommandHandler(["del", "delete"], del_cmd))
     app.add_handler(CommandHandler("stickers", stickers_cmd))
     app.add_handler(CommandHandler("panel", panel_cmd))
+    app.add_handler(CallbackQueryHandler(panel_callback, pattern=r"^p:"))
 
     app.add_handler(
         MessageHandler(
@@ -900,7 +1009,6 @@ def main():
 
     if POST_INTERVAL_HOURS:
         jq.run_repeating(post_combined_job, interval=int(POST_INTERVAL_HOURS * 3600), first=30)
-        logger.info(f"Scheduled repeating post every {POST_INTERVAL_HOURS}h")
     else:
         for t in POST_TIMES:
             try:
@@ -920,7 +1028,7 @@ def main():
 
     logger.info(
         f"Silent Ruins 🥀 started | channel={CHANNEL_ID} | mode={'photos' if PHOTO_MODE else 'text-only'} | "
-        f"times={POST_TIMES} | interval={POST_INTERVAL_HOURS} | stickers_set={STICKER_SET or '-'}"
+        f"times={POST_TIMES} | sticker_set={STICKER_SET or '-'}"
     )
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
