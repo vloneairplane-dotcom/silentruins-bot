@@ -6,6 +6,16 @@
 
 ## ✨ امکانات
 
+### 🆕 Pro v3 Upgrade
+- 🗄 **SQLite Analytics Database** برای ثبت پست‌ها، خطاها، آهنگ‌ها و تعداد استفاده از هر آهنگ
+- 📊 **گزارش تحلیلی** با `/report`
+- 🔎 **جستجوی آهنگ** با `/findsong`
+- ⏰ **زمان‌بندی دستی یک‌باره** با `/schedule` و نمایش Jobها با `/jobs`
+- 💾 **Backup یک‌کلیکی** با `/backup` شامل Library، State و Database
+- 🎛️ دکمه‌های جدید در پنل مدیریت برای گزارش، Jobها و Backup
+- 📈 آمار `/stats` اکنون از داده‌های واقعی Analytics نیز استفاده می‌کند
+
+
 - 🔗 **سیستم حس‌محور** — ۶ حس (بارون 🌧 شب 🌃 تنهایی 🚶 دلتنگی 🥀 خستگی 🕯 ویرونه 🏚)؛ هر پست عکس و کپشنش از **یک** حس انتخاب می‌شن و آهنگ هم ترجیحاً از همون حسه
 - ✍️ **متن‌های سنگین و ادبی-عامیانه** — ۵۰ متن غمگینِ دلنشین (مثل «همه‌چیز به وقتش قشنگه؛ هیچ‌چیزی بعدا قشنگ نیس») که بدون تکرار می‌چرخن
 - 🌑 **عکس‌های دارک و تک‌نفره** — کوئری‌های تاریک + فیلتر خودکار رنگ میانگین؛ ربات از بین نتایج Pexels تاریک‌ترین‌ها رو برمی‌داره
@@ -94,6 +104,11 @@ python bot.py
 | `/stats` | آمار کامل + زمان پست بعدی |
 | `/panel` | پنل **شیشه‌ای** مدیریت (پست فوری، پیش‌نمایش، آمار، لیست آهنگ‌ها، توقف/ادامه — همه با دکمه) |
 | `/id` | آیدی عددی خودت |
+| `/report` | گزارش Analytics |
+| `/findsong <کلمه>` | جستجوی آهنگ |
+| `/schedule <زمان>` | زمان‌بندی یک پست؛ مثال `/schedule 23:30` |
+| `/jobs` | نمایش Jobهای فعال |
+| `/backup` | ساخت و ارسال Backup |
 
 ## ⚙️ متغیرها (`.env`)
 
@@ -109,6 +124,8 @@ python bot.py
 | `POST_TIMES` | `10:00,16:00,22:00,02:00` | ساعت‌های پست، با کاما |
 | `DATA_DIR` | `.` | مسیر دیتای دائمی (روی Railway: `/data`) |
 | `PORT` | — | فقط برای هاست‌های Web Service |
+
+دیتابیس Analytics به‌صورت خودکار در `DATA_DIR/silentruins.db` ساخته می‌شود.
 
 ## ☁️ دیپلوی روی Railway
 
@@ -134,3 +151,16 @@ python bot.py
 ## Pexels API (فقط حالت عکس‌دار)
 
 از https://www.pexels.com/api/ رایگان بگیر — ساعتی 200 و ماهانه 20,000 درخواست رایگانه. عکس‌ها با credit عکاس پست می‌شن.
+
+## Smart Content Engine (v3 upgrade)
+
+The bot now builds coherent sad-content sets instead of selecting everything independently:
+
+- **Mood Engine:** chooses moods using time-of-day windows and recent-mood cooldowns.
+- **Content Matching:** scores text, image, and music compatibility with the selected mood.
+- **Anti-Repetition:** remembers recent post signatures, captions, and image URLs to avoid immediate repeats.
+- **Smart Selection:** tries multiple candidate sets and publishes the strongest fresh set.
+- **Quality Score:** stores a 0–100 score for text/image/music/overall coherence.
+- **Mood Status:** `/mood` shows recent mood rotation and the latest quality score.
+
+The existing Music Library, Pexels search, scheduler, analytics database, admin panel, backup, and Railway deployment remain in place.

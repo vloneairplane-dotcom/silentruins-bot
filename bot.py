@@ -22,10 +22,13 @@ import os
 import random
 import threading
 import time as time_module
-from datetime import time as dtime
+from datetime import datetime, time as dtime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from zoneinfo import ZoneInfo
+
+from database import Database
+from content_engine import choose_mood, quality_score, remember_post, is_duplicate
 
 import requests
 from dotenv import load_dotenv
@@ -96,6 +99,9 @@ POST_TIMES = [t.strip() for t in POST_TIMES_RAW.split(",") if t.strip()]
 MUSIC_TIMES_RAW = os.getenv("MUSIC_TIMES", "")
 MUSIC_TIMES = [t.strip() for t in MUSIC_TIMES_RAW.split(",") if t.strip()]
 
+QUALITY_THRESHOLD = int(os.getenv("QUALITY_THRESHOLD", "85"))
+MAX_CANDIDATES = max(3, int(os.getenv("MAX_CANDIDATES", "8")))
+
 POST_INTERVAL_HOURS = os.getenv("POST_INTERVAL_HOURS")
 try:
     POST_INTERVAL_HOURS = float(POST_INTERVAL_HOURS) if POST_INTERVAL_HOURS else None
@@ -106,6 +112,10 @@ DATA_DIR = Path(os.getenv("DATA_DIR", ".")).expanduser()
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 LIBRARY_FILE = DATA_DIR / "library.json"
 STATE_FILE = DATA_DIR / "state.json"
+DB_FILE = DATA_DIR / "silentruins.db"
+BACKUP_DIR = DATA_DIR / "backups"
+BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+DB = Database(str(DB_FILE))
 MUSIC_DIR = DATA_DIR / "music"
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -290,6 +300,11 @@ def load_library():
 
 def save_library(data):
     LIBRARY_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+    for track in data.get("tracks", []):
+        try:
+            DB.track_upsert(track)
+        except Exception:
+            logger.exception("Failed to sync track to database")
 
 
 def load_state():
@@ -314,29 +329,48 @@ def is_admin(update: Update) -> bool:
 # ---------------------------------------------------------------------------
 # کپشن — متن هم‌حس + ایموجی مرتبط، بدون تکرار
 # ---------------------------------------------------------------------------
-def pick_caption(mood):
+def choose_caption(mood, state=None):
+    """Peek a caption without mutating state; publish commits the chosen caption once."""
     pool = MOODS[mood]["captions"]
-    state = load_state()
+    state = state or load_state()
     used_map = state.get("caption_used", {})
     if not isinstance(used_map, dict):
         used_map = {}
     used = set(used_map.get(mood, []))
     remaining = [i for i in range(len(pool)) if i not in used]
     if not remaining:
-        used = set()
         remaining = list(range(len(pool)))
-    idx = random.choice(remaining)
-    used.add(idx)
+    return random.choice(remaining), pool[random.choice(remaining)]
+
+
+def commit_caption(mood, idx):
+    state = load_state()
+    used_map = state.get("caption_used", {})
+    if not isinstance(used_map, dict):
+        used_map = {}
+    used = set(used_map.get(mood, []))
+    used.add(int(idx))
+    pool_len = len(MOODS[mood]["captions"])
+    # Start a new caption cycle after all captions have been used.
+    if len(used) >= pool_len:
+        used = set()
     used_map[mood] = sorted(used)
     save_state({"caption_used": used_map})
-    return pool[idx]
 
 
-def build_main_caption(mood):
-    """متن سنگین + یه ایموجی مرتبط با حسش + امضا"""
+def pick_caption(mood):
+    idx, text = choose_caption(mood)
+    commit_caption(mood, idx)
+    return text
+
+
+def build_main_caption(mood, state=None, peek=True):
+    """Build caption; by default do not mutate state until a post is committed."""
+    if peek:
+        idx, text = choose_caption(mood, state)
+        return f"{text} {random.choice(MOODS[mood]['emojis'])}\n\n{SIGNATURE}", idx
     text = pick_caption(mood)
-    emoji = random.choice(MOODS[mood]["emojis"])
-    return f"{text} {emoji}\n\n{SIGNATURE}"
+    return f"{text} {random.choice(MOODS[mood]['emojis'])}\n\n{SIGNATURE}", None
 
 
 # ---------------------------------------------------------------------------
@@ -374,6 +408,24 @@ def get_next_track(mood=None, peek=False):
     return {"file_id": chosen, "title": "بدون‌نام"}
 
 
+def consume_track(track):
+    """Consume exactly one selected track from the current no-repeat cycle."""
+    if not track:
+        return
+    lib = load_library()
+    fid = track.get("file_id")
+    if not fid:
+        return
+    if fid not in [t.get("file_id") for t in lib.get("tracks", [])]:
+        return
+    if not lib.get("unplayed"):
+        lib["unplayed"] = [t["file_id"] for t in lib["tracks"]]
+        random.shuffle(lib["unplayed"])
+    if fid in lib["unplayed"]:
+        lib["unplayed"].remove(fid)
+    save_library(lib)
+
+
 def build_audio_caption(track):
     title = (track.get("title") or "").strip() or "بدون‌نام"
     performer = (track.get("performer") or "").strip()
@@ -388,6 +440,10 @@ def build_audio_caption(track):
 
 async def send_track(context, chat_id, track, reply_to=None):
     caption = build_audio_caption(track)
+    try:
+        DB.track_played(track.get("file_id"))
+    except Exception:
+        pass
     file_path = track.get("file_path")
     if file_path and Path(file_path).exists():
         with open(file_path, "rb") as f:
@@ -414,6 +470,10 @@ def delete_track_by_number(n):
     removed = lib["tracks"].pop(n - 1)
     lib["unplayed"] = [f for f in lib["unplayed"] if f != removed["file_id"]]
     save_library(lib)
+    try:
+        DB.track_deleted(removed.get("file_id"))
+    except Exception:
+        pass
     fp = removed.get("file_path")
     if fp:
         try:
@@ -436,8 +496,12 @@ def _luminance(hex_color):
         return 128
 
 
-def _pick_dark_photo(photos):
+def _pick_dark_photo(photos, excluded_urls=None):
     """از بین نتایج، تاریک‌ترین‌ها انتخاب می‌شن (فضای دارک مینیمال)."""
+    excluded_urls = set(excluded_urls or [])
+    fresh = [p for p in photos if p.get("src", {}).get("large2x") not in excluded_urls and p.get("src", {}).get("large") not in excluded_urls and p.get("src", {}).get("original") not in excluded_urls]
+    if fresh:
+        photos = fresh
     scored = [(_luminance(p.get("avg_color") or "#808080"), p) for p in photos]
     very_dark = [p for lum, p in scored if lum < 55]
     if very_dark:
@@ -446,7 +510,7 @@ def _pick_dark_photo(photos):
     return random.choice(darkest_half)[1]
 
 
-def fetch_pexels_photo(mood):
+def fetch_pexels_photo(mood, state=None):
     queries = MOODS[mood]["queries"]
     plans = [
         (random.choice(queries), "black", random.randint(1, 8)),
@@ -474,11 +538,11 @@ def fetch_pexels_photo(mood):
             photos = resp.json().get("photos", [])
             if not photos:
                 continue
-            photo = _pick_dark_photo(photos)
+            photo = _pick_dark_photo(photos, (state or {}).get("recent_image_urls", []))
             src = photo.get("src", {})
             url = src.get("large2x") or src.get("large") or src.get("original")
             save_state({"last_query": query})
-            return url, photo.get("photographer", "Pexels"), query
+            return url, photo.get("photographer", "Pexels"), query, photo
         except requests.RequestException as e:
             logger.warning(f"Pexels attempt failed ('{query}' p{page}): {e}")
             time_module.sleep(1)
@@ -497,29 +561,86 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
 
 
 async def publish_post(context, chat_id, consume_music=True):
-    """ست کامل پست: عکس/متن (هم‌حس + ایموجی مرتبط) + آهنگ (ترجیحاً هم‌حس)."""
-    result = {"posted": False, "music": False, "mood": None}
+    """Build and publish a coherent SilentRuins set with mood, matching, anti-repeat and quality scoring."""
+    state = load_state()
+    result = {"posted": False, "music": False, "mood": None, "quality": None}
 
-    mood = random.choice(list(MOODS.keys()))
-    result["mood"] = mood
-    caption = build_main_caption(mood)
+    best = None
+    for _ in range(MAX_CANDIDATES):
+        mood = choose_mood(MOODS, state, datetime.now(TIMEZONE).hour)
+        caption, caption_idx = build_main_caption(mood, state=state, peek=True)
+        photo_meta = None
+        url = None
+        photographer = None
+        query = None
+        if PHOTO_MODE:
+            try:
+                url, photographer, query, photo = await asyncio.to_thread(fetch_pexels_photo, mood, state)
+                photo_meta = {
+                    "query": query,
+                    "alt": photo.get("alt", ""),
+                    "luminance": _luminance(photo.get("avg_color") or "#808080"),
+                }
+            except Exception as exc:
+                logger.warning("Photo candidate failed: %s", exc)
+        track = get_next_track(mood=mood, peek=True)
+        score = quality_score(mood, caption, track, photo_meta, MOODS, MOOD_ALIASES)
+        duplicate = is_duplicate(state, mood, caption, track, url)
+        candidate = {
+            "overall": score["overall"],
+            "mood": mood,
+            "caption": caption,
+            "caption_idx": caption_idx,
+            "track": track,
+            "url": url,
+            "photographer": photographer,
+            "score": score,
+            "duplicate": duplicate,
+        }
+        if not duplicate and (best is None or candidate["overall"] > best["overall"]):
+            best = candidate
+        if best and best["overall"] >= QUALITY_THRESHOLD:
+            break
 
-    if PHOTO_MODE:
-        url, photographer, query = await asyncio.to_thread(fetch_pexels_photo, mood)
-        if PHOTO_CREDIT:
-            caption = f"{caption}\n📷 {photographer}"
-        main_msg = await context.bot.send_photo(chat_id=chat_id, photo=url, caption=caption)
+    if best is None:
+        raise RuntimeError("نتونستم یک ترکیب تازه و غیرتکراری بسازم")
+
+    mood = best["mood"]
+    caption = best["caption"]
+    caption_idx = best["caption_idx"]
+    track = best["track"]
+    url = best["url"]
+    photographer = best["photographer"]
+    score = best["score"]
+
+    # Preview mode never commits library/state changes.
+    if url:
+        photo_credit = f"\n📷 {photographer}" if PHOTO_CREDIT else ""
+        main_msg = await context.bot.send_photo(chat_id=chat_id, photo=url, caption=caption + photo_credit)
     else:
         main_msg = await context.bot.send_message(chat_id=chat_id, text=caption)
-    result["posted"] = True
 
-    track = get_next_track(mood=mood, peek=not consume_music)
+    result["posted"] = True
+    result["quality"] = score
+    result["mood"] = mood
+
     if track:
         await send_track(context, chat_id, track, reply_to=main_msg.message_id)
         result["music"] = True
 
     if consume_music:
-        save_state({"last_mood": mood})
+        if caption_idx is not None:
+            commit_caption(mood, caption_idx)
+        if track:
+            consume_track(track)
+        state = remember_post(state, mood, caption, track, url, score)
+        state["last_mood"] = mood
+        save_state(state)
+        try:
+            DB.event("quality_score", str({"mood": mood, **score}))
+            DB.post_start(mood, caption, track.get("file_id") if track else None)
+        except Exception:
+            logger.exception("Failed to write post analytics")
     return result
 
 
@@ -540,6 +661,11 @@ async def post_combined_job(context: ContextTypes.DEFAULT_TYPE):
         return result
     except Exception as e:
         logger.exception("Post job failed")
+        try:
+            DB.post_failed(None, None, e)
+            DB.event("post_failed", str(e))
+        except Exception:
+            pass
         await notify_admins(context, f"⚠️ پست خودکار خطا داد: {e}\n(چک کن ربات ادمین چنل باشه)")
         return False
 
@@ -551,7 +677,9 @@ def _post_result_text(result):
     mood_fa = f"{MOODS[mood]['fa']} {MOODS[mood]['emoji']}" if mood else "؟"
     bits = ["عکس" if PHOTO_MODE else "متن"]
     bits.append("آهنگ" if result["music"] else "بدون آهنگ (کتابخونه خالیه)")
-    return f"✅ پست شد — حس: {mood_fa}\n{' + '.join(bits)}"
+    quality = result.get("quality") or {}
+    quality_line = f"\n⭐ کیفیت ست: {quality.get('overall', "?")}/100" if quality else ""
+    return f"✅ پست شد — حس: {mood_fa}\n{' + '.join(bits)}{quality_line}"
 
 
 # جاب‌های سازگاری قدیمی
@@ -563,7 +691,7 @@ async def post_photo_only_job(context: ContextTypes.DEFAULT_TYPE):
         return
     mood = random.choice(list(MOODS.keys()))
     try:
-        url, photographer, query = await asyncio.to_thread(fetch_pexels_photo, mood)
+        url, photographer, query, _photo = await asyncio.to_thread(fetch_pexels_photo, mood, load_state())
         await context.bot.send_photo(chat_id=CHANNEL_ID, photo=url, caption=build_main_caption(mood))
         save_state({"post_count": load_state().get("post_count", 0) + 1, "last_mood": mood})
     except Exception as e:
@@ -603,7 +731,17 @@ def _stats_text(context=None):
     ]
     if last_mood:
         lines.append(f"🌗 آخرین حس: {MOODS[last_mood]['fa']} {MOODS[last_mood]['emoji']}")
+    qscore = state.get("last_quality_score") or {}
+    if qscore:
+        lines.append(f"⭐ کیفیت آخرین ست: {qscore.get('overall', "?")}/100  · متن {qscore.get('text', "?")} · عکس {qscore.get('image', "?")} · آهنگ {qscore.get('music', "?")}")
     lines.append(f"🎵 آهنگ‌ها: {len(lib['tracks'])} (حس‌دار: {tagged}؛ تو چرخه: {len(lib['unplayed'])})")
+    try:
+        a = DB.summary()
+        lines.append(f"📈 ۲۴ ساعت اخیر: {a['today']} پست موفق • خطا: {a['failed']}")
+        if a["moods"]:
+            lines.append("🌗 حس‌های پرتکرار: " + "، ".join(f"{MOODS.get(x['mood'], {}).get('fa', x['mood'])} ({x['c']})" for x in a["moods"][:3]))
+    except Exception:
+        pass
     if POST_INTERVAL_HOURS:
         lines.append(f"⏰ هر {POST_INTERVAL_HOURS} ساعت")
     else:
@@ -648,8 +786,10 @@ HELP_TEXT = (
     "دستورات:\n"
     "/panel — پنل شیشه‌ای مدیریت 🎛\n"
     "/post پست فوری • /preview پیش‌نمایش\n"
-    "/songs آهنگ‌ها • /del حذف آهنگ\n"
-    "/pause توقف • /resume ادامه • /stats آمار • /id آیدی"
+    "/songs آهنگ‌ها • /findsong جستجوی آهنگ • /del حذف آهنگ\n"
+    "/pause توقف • /resume ادامه • /stats آمار • /report گزارش\n"
+    "/schedule زمان‌بندی یک پست • /jobs زمان‌های فعال • /backup بکاپ • /id آیدی\n"
+    "/mood وضعیت حس/امتیاز آخرین ست"
 )
 
 
@@ -684,6 +824,11 @@ def _panel_markup():
                 callback_data="p:resume" if paused else "p:pause",
             )
         ],
+        [
+            InlineKeyboardButton("📈 گزارش", callback_data="p:report"),
+            InlineKeyboardButton("⏰ Jobها", callback_data="p:jobs"),
+        ],
+        [InlineKeyboardButton("💾 بکاپ", callback_data="p:backup")],
     ])
 
 
@@ -726,6 +871,36 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await q.answer("⏳ در حال انتشار…")
         result = await post_combined_job(context)
         await q.message.reply_text(_post_result_text(result))
+    elif data == "p:report":
+        await q.answer()
+        a = DB.summary()
+        text = (
+            f"📊 گزارش\n📮 موفق: {a['posts']}\n"
+            f"📈 ۲۴ ساعت: {a['today']}\n"
+            f"❌ خطا: {a['failed']}\n"
+            f"🎵 آهنگ: {a['tracks']}"
+        )
+        await q.message.reply_text(text)
+    elif data == "p:jobs":
+        await q.answer()
+        jobs = context.job_queue.jobs()
+        lines = ["⏰ Jobهای فعال:"] + [
+            f"• {j.name or 'بدون‌نام'} → {j.next_t.astimezone(TIMEZONE).strftime('%Y-%m-%d %H:%M') if j.next_t else '؟'}"
+            for j in jobs
+        ]
+        await q.message.reply_text("\n".join(lines) if jobs else "📭 هیچ Job فعالی وجود نداره.")
+    elif data == "p:backup":
+        await q.answer("💾 در حال ساخت بکاپ…")
+        stamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
+        target = BACKUP_DIR / f"silentruins_backup_{stamp}.zip"
+        import zipfile
+        with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+            for f in [LIBRARY_FILE, STATE_FILE, DB_FILE]:
+                if f.exists():
+                    z.write(f, arcname=f.name)
+        DB.event("backup_created", str(target))
+        with target.open("rb") as f:
+            await q.message.reply_document(document=f, filename=target.name, caption="💾 بکاپ آماده شد.")
 
 
 # ---------------------------------------------------------------------------
@@ -758,7 +933,11 @@ async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         result = await publish_post(context, update.effective_chat.id, consume_music=False)
         mood = result["mood"]
-        await update.message.reply_text(f"🌗 حس این پست: {MOODS[mood]['fa']} {MOODS[mood]['emoji']}")
+        quality = result.get("quality") or {}
+        await update.message.reply_text(
+            f"🌗 حس این پست: {MOODS[mood]['fa']} {MOODS[mood]['emoji']}\n"
+            f"⭐ کیفیت: {quality.get('overall', '?')}/100"
+        )
         if not result["music"]:
             await update.message.reply_text("🎵 کتابخونه‌ی آهنگ خالیه — MP3 بفرست.")
     except Exception as e:
@@ -814,6 +993,106 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🗑 «{removed.get('title') or 'بدون‌نام'}» حذف شد.")
     else:
         await update.message.reply_text("❌ این شماره تو کتابخونه نیست.")
+
+
+# ---------------------------------------------------------------------------
+# قابلیت‌های مدیریتی v3 — زمان‌بندی پویا، جستجو، بکاپ و گزارش
+# ---------------------------------------------------------------------------
+def _parse_schedule(value):
+    """Parse YYYY-MM-DD HH:MM or HH:MM into timezone-aware datetime."""
+    value = " ".join(value.strip().split())
+    fmts = ["%Y-%m-%d %H:%M", "%H:%M"]
+    for fmt in fmts:
+        try:
+            dt = datetime.strptime(value, fmt)
+            if fmt == "%H:%M":
+                now = datetime.now(TIMEZONE)
+                dt = dt.replace(year=now.year, month=now.month, day=now.day)
+                if dt <= now:
+                    dt += timedelta(days=1)
+            return dt.replace(tzinfo=TIMEZONE)
+        except ValueError:
+            continue
+    return None
+
+
+async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    if not context.args:
+        await update.message.reply_text("فرمت: /schedule 23:30\nیا: /schedule 2026-09-09 23:30")
+        return
+    raw = " ".join(context.args)
+    when = _parse_schedule(raw)
+    if not when:
+        await update.message.reply_text("❌ زمان نامعتبره. مثال: /schedule 23:30")
+        return
+    if when <= datetime.now(TIMEZONE):
+        await update.message.reply_text("❌ این زمان گذشته است.")
+        return
+    context.job_queue.run_once(post_combined_job, when, name=f"once_{int(when.timestamp())}")
+    DB.event("schedule_created", when.isoformat())
+    await update.message.reply_text(f"⏰ پست زمان‌بندی شد برای {when.strftime('%Y-%m-%d %H:%M')} ({TIMEZONE_STR})")
+
+
+async def jobs_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    jobs = context.job_queue.jobs()
+    if not jobs:
+        await update.message.reply_text("📭 هیچ Job فعالی وجود نداره.")
+        return
+    lines = ["⏰ Jobهای فعال:"]
+    for j in jobs:
+        nxt = j.next_t.astimezone(TIMEZONE).strftime("%Y-%m-%d %H:%M") if j.next_t else "؟"
+        lines.append(f"• {j.name or 'بدون‌نام'} → {nxt}")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def find_song_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    q = " ".join(context.args).strip().lower()
+    if not q:
+        await update.message.reply_text("فرمت: /findsong کلمه")
+        return
+    lib = load_library()
+    hits = [t for t in lib["tracks"] if q in (t.get("title") or "").lower() or q in (t.get("performer") or "").lower() or q in (t.get("mood") or "").lower()]
+    if not hits:
+        await update.message.reply_text("🔎 چیزی پیدا نشد.")
+        return
+    lines = [f"🔎 {len(hits)} نتیجه:"]
+    for t in hits[:30]:
+        mood = MOODS.get(t.get("mood"), {}).get("fa", "بدون حس")
+        lines.append(f"• {t.get('title') or 'بدون‌نام'} — {t.get('performer') or 'ناشناخته'} [{mood}]")
+    await update.message.reply_text("\n".join(lines))
+
+
+async def report_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    a = DB.summary()
+    lines = ["📊 گزارش SilentRuins v2", "", f"📮 کل پست موفق: {a['posts']}", f"📈 پست موفق ۲۴ ساعت اخیر: {a['today']}", f"❌ پست ناموفق: {a['failed']}", f"🎵 آهنگ‌ها: {a['tracks']}"]
+    if a["top_tracks"]:
+        lines += ["", "🔥 آهنگ‌های پرتکرار:"]
+        lines += [f"• {x['title'] or 'بدون‌نام'} — {x['play_count']} بار" for x in a["top_tracks"]]
+    await update.message.reply_text("\n".join(lines))
+
+
+async def backup_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    stamp = datetime.now(TIMEZONE).strftime("%Y%m%d_%H%M%S")
+    target = BACKUP_DIR / f"silentruins_backup_{stamp}.zip"
+    import zipfile
+    files_to_backup = [LIBRARY_FILE, STATE_FILE, DB_FILE]
+    with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
+        for f in files_to_backup:
+            if f.exists():
+                z.write(f, arcname=f.name)
+    DB.event("backup_created", str(target))
+    with target.open("rb") as f:
+        await update.message.reply_document(document=f, filename=target.name, caption="💾 بکاپ آماده شد.")
 
 
 # ---------------------------------------------------------------------------
@@ -907,6 +1186,19 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ خطا در ذخیره آهنگ: {e}")
 
 
+async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update):
+        return
+    state = load_state()
+    recent = state.get("recent_moods", []) or []
+    score = state.get("last_quality_score") or {}
+    lines = ["🌗 Mood Engine", "", f"آخرین حس: {MOODS.get(state.get('last_mood'), {}).get('fa', '—')}"]
+    lines.append(f"چرخش اخیر: {' → '.join(MOODS[m]['fa'] for m in recent if m in MOODS) or '—'}")
+    if score:
+        lines += ["", f"⭐ امتیاز آخرین ست: {score.get('overall', '?')}/100", f"متن: {score.get('text', '?')}/100", f"عکس: {score.get('image', '?')}/100", f"آهنگ: {score.get('music', '?')}/100"]
+    await update.message.reply_text("\n".join(lines))
+
+
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -926,10 +1218,16 @@ def main():
     app.add_handler(CommandHandler("pause", pause_cmd))
     app.add_handler(CommandHandler("resume", resume_cmd))
     app.add_handler(CommandHandler("stats", stats_cmd))
+    app.add_handler(CommandHandler("report", report_cmd))
+    app.add_handler(CommandHandler("backup", backup_cmd))
+    app.add_handler(CommandHandler("schedule", schedule_cmd))
+    app.add_handler(CommandHandler("jobs", jobs_cmd))
+    app.add_handler(CommandHandler("findsong", find_song_cmd))
     app.add_handler(CommandHandler("status", stats_cmd))  # legacy
     app.add_handler(CommandHandler("songs", songs_cmd))
     app.add_handler(CommandHandler(["del", "delete"], del_cmd))
     app.add_handler(CommandHandler("panel", panel_cmd))
+    app.add_handler(CommandHandler("mood", mood_cmd))
     app.add_handler(CallbackQueryHandler(panel_callback, pattern=r"^p:"))
 
     app.add_handler(
