@@ -1,3 +1,26 @@
+# SilentRuins Bot V3.2
+
+V3.2 focuses on editorial quality rather than adding more features. The bot now treats each post as a coherent package of **mood + Persian caption + dark visual + music**.
+
+### V3.2 improvements
+- Time-of-day mood priorities, with strong Midnight identity for Night/Lonely/Ruins.
+- Semantic music taxonomy: Heartbreak, Missing, Memories, Loneliness, etc. map to the six channel moods.
+- Better music candidate selection without consuming the no-repeat cycle during preview/candidate generation.
+- Persian caption quality scoring and replacement of weak/awkward legacy captions.
+- Visual intent scoring for rain/night/loneliness/love/tired/ruins instead of darkness-only scoring.
+- Quality score is a real production gate: low-quality candidates are rejected.
+- Stronger recent-track, recent-caption, recent-image and recent-post anti-repeat memory.
+- Existing SQLite analytics, admin panel, scheduler, Pexels integration, Railway support and backup system are preserved.
+
+### Recommended production settings
+```env
+POST_TIMES=10:00,16:00,22:00,02:00
+QUALITY_THRESHOLD=85
+MAX_CANDIDATES=10
+TIMEZONE=Asia/Tehran
+```
+
+> Important: V3.2 improves content selection, but the best posting times should eventually be learned from real channel engagement data.
 # SilentRuins Bot 🥀 — Pro Edition
 
 ربات حرفه‌ای تلگرام برای چنل‌های غمگین و دپ — هر پست یه «ستِ هم‌حس»:
