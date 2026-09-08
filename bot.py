@@ -81,10 +81,14 @@ try:
 except:
     POST_INTERVAL_HOURS = None
 
-LIBRARY_FILE = Path("library.json")
-STATE_FILE = Path("state.json")
-MUSIC_DIR = Path("music")
-MUSIC_DIR.mkdir(exist_ok=True)
+# اگه DATA_DIR ست بشه (مثلاً /data روی Railway با Volume)، کتابخونه آهنگ و
+# وضعیت ربات اونجا ذخیره می‌شن و بعد از ری‌استارت/دیپلوی پاک نمی‌شن.
+DATA_DIR = Path(os.getenv("DATA_DIR", ".")).expanduser()
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LIBRARY_FILE = DATA_DIR / "library.json"
+STATE_FILE = DATA_DIR / "state.json"
+MUSIC_DIR = DATA_DIR / "music"
+MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # Sad / Dep content

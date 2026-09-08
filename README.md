@@ -69,8 +69,23 @@ python bot.py
 
 ## دیپلوی
 
-- Render / Railway / VPS: `worker: python bot.py`
-- ربات یه health server رو پورت 10000 هم ران میکنه تا روی سرویس‌های Web Service خاموش نشه.
+### ☁️ Railway (رایگان برای شروع، ۲۴ساعته)
+
+ریپو فایل `railway.toml` داره، پس آماده‌ی دیپلویِ مستقیمه:
+
+1. اول **توکن رو عوض کن** (بخش امنیت بالای همین صفحه!) — بعد توی [railway.com](https://railway.com) با اکانت GitHub لاگین کن
+2. **New Project → Deploy from GitHub repo** → ریپوی `silentruins-bot` رو انتخاب کن (برنچ `arena/01a07f23-silentruins-bot` یا main بعد از مرج)
+3. تو تب **Variables** این متغیرها رو اضافه کن:
+   `BOT_TOKEN` (توکن **جدید**)، `PEXELS_API_KEY`، `ADMIN_IDS`، `CHANNEL`، `TIMEZONE=Asia/Tehran`، `POST_TIMES=10:00,16:00,22:00,02:00`
+4. **(مهم)** برای اینکه کتابخونه‌ی آهنگ‌ها بعد از هر دیپلوی پاک نشه:
+   تب سرویس → **+ Add → Volume** → Mount Path رو بذار `/data` → بعد تو Variables اضافه کن: `DATA_DIR=/data`
+5. Deploy! تو تب **Deployments → Logs** اگه خط `Silent Ruins Pexels bot started` رو دیدی یعنی روشنه ✅
+
+از این به بعد هر چیزی که به برنچ پوش بشه، Railway **خودش خودکار دوباره دیپلویش می‌کنه**. بدون Volume (قدم ۴) ربات کار می‌کنه ولی بعد از هر دیپلوی لیست آهنگ‌ها ریست می‌شه.
+
+### 🖥 VPS / کامپیوتر خودت
+
+`python bot.py` — ربات یه health server کوچیک هم رو پورت 10000 ران می‌کنه که برای هاست‌های Web Service مثل Render لازمه.
 
 ## Pexels API
 
