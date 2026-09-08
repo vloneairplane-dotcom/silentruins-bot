@@ -1,7 +1,5 @@
-"""Compatibility launcher for old Railway start commands.
-The v5 bot is self-contained; this file intentionally does no monkeypatching.
-"""
-from bot import main
+"""Compatibility launcher for Railway and older start commands."""
+from v51_runtime import main
 
 if __name__ == "__main__":
     main()
