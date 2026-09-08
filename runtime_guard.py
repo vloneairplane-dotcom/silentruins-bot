@@ -1,25 +1,27 @@
 """SilentRuins Owner Mode runtime hardening.
 
-Production safety layer for the legacy bot while the fixes are gradually folded
-back into bot.py. It patches only the music selector, audio accounting, and
-Pexels dark-image picker before executing the original bot.
+V4.2 production safety/matching layer. It patches the legacy bot at startup so
+music selection has strong semantic matching, exploration/diversity, and a
+longer preview cooldown; audio analytics are recorded only after Telegram
+accepts the file; and Pexels keeps the cinematic look without near-black
+images.
 """
 from __future__ import annotations
 
 import random
 from pathlib import Path
 
-GUARD_VERSION = "4.1.0-owner-guard"
+GUARD_VERSION = "4.2.0-matching-engine"
 
 
 def _patch_source(source: str) -> str:
     # ------------------------------------------------------------------
-    # Music selector: total function + preview diversity.
+    # Music selector: total function + semantic matching + exploration.
     # ------------------------------------------------------------------
     start = source.index("def get_next_track(mood=None, peek=False):")
     end = source.index("\n\ndef consume_track(track):", start)
     replacement = '''def get_next_track(mood=None, peek=False):
-    """Select music safely with cooldowns and preview isolation."""
+    """Select music safely with semantic matching, exploration and cooldowns."""
     lib = load_library()
     tracks = [t for t in lib.get("tracks", []) if t and t.get("file_id")]
     if not tracks:
@@ -30,11 +32,36 @@ def _patch_source(source: str) -> str:
     cooldown_ids = set(recent_ids[-MUSIC_COOLDOWN_POSTS:])
     by_id = {t["file_id"]: t for t in tracks}
 
+    def _play_count(track):
+        try:
+            row = DB.conn.execute(
+                "SELECT play_count FROM tracks WHERE file_id=?",
+                (track.get("file_id"),),
+            ).fetchone()
+            return int(row[0]) if row else 0
+        except Exception:
+            return 0
+
+    def _semantic_score(track):
+        if not mood:
+            return 0.60
+        return track_match(track, mood, MOODS, MOOD_ALIASES)
+
+    def _selection_score(track):
+        # Semantic fit is primary. A small exploration bonus prevents the same
+        # few high-scoring songs from dominating a library of 50+ tracks.
+        semantic = _semantic_score(track)
+        count = _play_count(track)
+        exploration = 0.10 if count == 0 else (0.06 if count <= 1 else 0.025 if count <= 2 else 0.0)
+        return semantic + exploration
+
     if peek:
         preview_recent = [x for x in (state.get("preview_recent_track_ids", []) or []) if x]
-        # Do not reuse a track that appeared in recent previews unless the
-        # whole library has been exhausted.
-        preview_excluded = set(preview_recent[-max(10, MAX_CANDIDATES):])
+        preview_window = max(30, MAX_CANDIDATES * 3)
+        preview_excluded = set(preview_recent[-preview_window:])
+
+        # Preview never repeats a recent preview track while there are fresh
+        # library choices. Production cooldown is also respected.
         pool = [
             t for t in tracks
             if t["file_id"] not in cooldown_ids
@@ -47,33 +74,20 @@ def _patch_source(source: str) -> str:
         if not pool:
             return None
 
-        if mood:
-            ranked = sorted(
-                pool,
-                key=lambda t: track_match(t, mood, MOODS, MOOD_ALIASES),
-                reverse=True,
-            )
-            # Keep the strongest semantic matches, but rotate among them.
-            if ranked:
-                scores = [track_match(t, mood, MOODS, MOOD_ALIASES) for t in ranked]
-                top_score = scores[0]
-                threshold = max(0.70, top_score - 0.10)
-                shortlist = [
-                    t for t, s in zip(ranked, scores)
-                    if s >= threshold
-                ]
-                if not shortlist:
-                    shortlist = ranked[: min(5, len(ranked))]
-            else:
-                shortlist = pool
+        ranked = sorted(pool, key=_selection_score, reverse=True)
+        if mood and ranked:
+            top_score = _selection_score(ranked[0])
+            # Allow near-best semantic matches so previews do not become a
+            # deterministic replay of the same song.
+            shortlist = [t for t in ranked if _selection_score(t) >= top_score - 0.13]
         else:
-            shortlist = pool
+            shortlist = ranked
 
         if not shortlist:
-            return None
-        chosen = random.choice(shortlist[: min(5, len(shortlist))])
+            shortlist = ranked[:5]
+        chosen = random.choice(shortlist[: min(6, len(shortlist))])
         preview_recent.append(chosen["file_id"])
-        save_state({"preview_recent_track_ids": preview_recent[-max(10, MAX_CANDIDATES):]})
+        save_state({"preview_recent_track_ids": preview_recent[-preview_window:]})
         return chosen
 
     lib["unplayed"] = [
@@ -86,33 +100,24 @@ def _patch_source(source: str) -> str:
         lib["unplayed"] = [t["file_id"] for t in eligible]
         random.shuffle(lib["unplayed"])
 
-    chosen_id = None
-    if mood:
-        ranked_ids = sorted(
-            lib["unplayed"],
-            key=lambda fid: track_match(by_id[fid], mood, MOODS, MOOD_ALIASES),
-            reverse=True,
-        )
-        for fid in ranked_ids:
-            if fid not in cooldown_ids:
-                chosen_id = fid
-                break
-
-    if chosen_id is None:
-        for fid in lib["unplayed"]:
-            if fid not in cooldown_ids:
-                chosen_id = fid
-                break
-
-    # Absolute fallback: never index or choose from an empty sequence.
-    if chosen_id is None and lib["unplayed"]:
-        chosen_id = lib["unplayed"][0]
-    if chosen_id is None:
+    eligible_tracks = [by_id[fid] for fid in lib["unplayed"] if fid in by_id]
+    if not eligible_tracks:
         return None
 
-    lib["unplayed"].remove(chosen_id)
-    save_library(lib)
-    return by_id.get(chosen_id)
+    ranked = sorted(eligible_tracks, key=_selection_score, reverse=True)
+    chosen = None
+    for track in ranked:
+        if track["file_id"] not in cooldown_ids:
+            chosen = track
+            break
+    if chosen is None:
+        chosen = ranked[0]
+
+    chosen_id = chosen["file_id"]
+    if chosen_id in lib["unplayed"]:
+        lib["unplayed"].remove(chosen_id)
+        save_library(lib)
+    return chosen
 '''
     source = source[:start] + replacement + source[end:]
 
@@ -153,13 +158,12 @@ def _patch_source(source: str) -> str:
     source = source[:start] + replacement + source[end:]
 
     # ------------------------------------------------------------------
-    # Image picker: keep the cinematic dark look without selecting images
-    # that are effectively black/indistinguishable.
+    # Image picker: cinematic darkness without unusable near-black results.
     # ------------------------------------------------------------------
     start = source.index("def _pick_dark_photo(photos, excluded_urls=None):")
     end = source.index("\n\ndef fetch_pexels_photo", start)
     replacement = '''def _pick_dark_photo(photos, excluded_urls=None):
-    """Pick a dark cinematic image, but reject near-black unusable results."""
+    """Pick a dark cinematic image while protecting readability."""
     excluded_urls = set(excluded_urls or [])
     fresh = [
         p for p in photos
@@ -177,8 +181,8 @@ def _patch_source(source: str) -> str:
         height = float(photo.get("height") or 0)
         resolution = min(1.0, (width * height) / 12000000.0) if width and height else 0.0
 
-        # Target a dark-but-readable luminance around 55-75. Penalize images
-        # below 30 because Telegram previews become almost black.
+        # Sweet spot: dark enough for SilentRuins, bright enough to retain
+        # visible subject/detail in Telegram.
         readability = 1.0 - min(1.0, abs(lum - 62.0) / 62.0)
         if lum < 30:
             readability *= 0.15
@@ -194,7 +198,6 @@ def _patch_source(source: str) -> str:
         return None
 
     scored.sort(key=lambda item: item[0], reverse=True)
-    # Rotate through the best few rather than repeatedly returning the same image.
     top = scored[: min(8, len(scored))]
     return random.choice(top)[2]
 '''
