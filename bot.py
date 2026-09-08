@@ -395,7 +395,12 @@ def get_next_track(mood=None, peek=False):
             )
             if ranked:
                 top_score = track_match(ranked[0], mood, MOODS, MOOD_ALIASES)
-                top = [t for t in ranked if track_match(t, mood, MOODS, MOOD_ALIASES) >= max(0.70, top_score - 0.08)]
+                threshold = max(0.70, top_score - 0.08)
+                top = [t for t in ranked if track_match(t, mood, MOODS, MOOD_ALIASES) >= threshold]
+                # If the best available match is below the 0.70 preference floor,
+                # still return the best-ranked track instead of choosing from an empty list.
+                if not top:
+                    return ranked[0]
                 return random.choice(top[: max(1, min(5, len(top)))])
         return random.choice(pool)
 
