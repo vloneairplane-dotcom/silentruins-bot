@@ -1,0 +1,7 @@
+.env
+__pycache__/
+library.json
+state.json
+music/*.mp3
+music/*.m4a
+music/*.ogg
