@@ -3,14 +3,16 @@ SilentRuins Bot 🥀 — Pro Edition
 --------------------------------
 ربات چنل‌های دپ/غمگین — هر پست یک «ستِ هم‌حس»:
 
-    📸 عکس غمگین Pexels  ←  کپشن فارسی مرتبط با عکس  ←  🎭 استیکر  ←  🎧 آهنگ مرتبط
+    📸 عکس دارک و تک‌نفره  ←  کپشن فارسی سنگین + ایموجی مرتبط  ←  🎧 آهنگ مرتبط
 
 - ۶ حس/موضوع: بارون، شب، تنهایی، دلتنگی، خستگی، ویرونه — عکس و متن از یک حس انتخاب می‌شن
-- آهنگ‌ها هم حس‌دارن: موقع ارسال MP3 تو کپشن بنویس rain/شب/بارون/… تا به همون حس وصل بشه
+- ایموجی ته هر کپشن، مرتبط با متنش (از استخر ایموجی همون حس)
+- عکس‌ها دارک: سرچ با فیلتر رنگ مشکی + انتخاب تاریک‌ترین نتیجه بر اساس رنگ میانگین
+- آهنگ‌ها هم حس‌دارن: موقع ارسال MP3 تو کپشن بنویس rain/شب/بارون/… تا وصل بشه
 - امضای آخر هر پست: — silent ruins 🥀
 - پنل مدیریت شیشه‌ای (دکمه‌ای) با /panel
 - بدون تکرار: نه آهنگ تکراری، نه کپشن تکراری (تا اتمام دور)
-- عکس خاموش هم می‌شه: SEND_PHOTOS=false → فقط متن + استیکر + آهنگ
+- عکس خاموش هم می‌شه: SEND_PHOTOS=false → فقط متن + آهنگ
 """
 
 import asyncio
@@ -53,9 +55,7 @@ def _env_flag(name, default=False):
     )
 
 
-# عکس‌دار بودن پست‌ها (پیش‌فرض روشن)
 SEND_PHOTOS = _env_flag("SEND_PHOTOS", True)
-# اسم عکاس ته کپشن (پیش‌فرض خاموش — کپشن ساده می‌مونه)
 PHOTO_CREDIT = _env_flag("PHOTO_CREDIT", False)
 
 PEXELS_API_KEY = (
@@ -66,8 +66,6 @@ PEXELS_API_KEY = (
 PHOTO_MODE = SEND_PHOTOS and bool(PEXELS_API_KEY)
 if SEND_PHOTOS and not PEXELS_API_KEY:
     logging.warning("⚠️ SEND_PHOTOS روشنه ولی PEXELS_API_KEY نیست — فعلاً فقط متن پست می‌شه")
-
-STICKER_SET = (os.getenv("STICKER_SET") or "").strip()
 
 _admin_raw = os.getenv("ADMIN_IDS") or os.getenv("ADMIN_USER_ID") or ""
 ADMIN_IDS = set()
@@ -112,7 +110,7 @@ MUSIC_DIR = DATA_DIR / "music"
 MUSIC_DIR.mkdir(parents=True, exist_ok=True)
 
 # ---------------------------------------------------------------------------
-# محتوا — حس‌محور: عکس و متن از یک حس، آهنگ هم اگه تگ خورد از همون حس
+# محتوا — حس‌محور
 # ---------------------------------------------------------------------------
 SIGNATURE = "— silent ruins 🥀"
 
@@ -120,6 +118,7 @@ MOODS = {
     "rain": {
         "fa": "بارون",
         "emoji": "🌧",
+        "emojis": ["🌧", "☔", "🖤"],
         "queries": [
             "rain window night dark", "rainy street night reflection",
             "person rain night silhouette", "rain drops glass dark",
@@ -139,6 +138,7 @@ MOODS = {
     "night": {
         "fa": "شب",
         "emoji": "🌃",
+        "emojis": ["🌙", "🌃", "🖤"],
         "queries": [
             "silhouette man night lights", "city night dark minimal",
             "dark sky moon silhouette", "woman dark room window night",
@@ -159,6 +159,7 @@ MOODS = {
     "lonely": {
         "fa": "تنهایی",
         "emoji": "🚶",
+        "emojis": ["🚶", "🌫", "🖤"],
         "queries": [
             "man silhouette alone dark", "person sitting alone night",
             "woman alone window silhouette", "lone bench night fog",
@@ -178,6 +179,7 @@ MOODS = {
     "love": {
         "fa": "دلتنگی",
         "emoji": "🥀",
+        "emojis": ["🥀", "💔", "🖤"],
         "queries": [
             "withered rose dark background", "old photograph dark aesthetic",
             "letter candle dark room", "empty bed night dark",
@@ -197,6 +199,7 @@ MOODS = {
     "tired": {
         "fa": "خستگی",
         "emoji": "🕯",
+        "emojis": ["🕯", "🌫", "🖤"],
         "queries": [
             "tired eyes close up dark", "smoke night silhouette man",
             "candle flame dark room", "person hood alone dark",
@@ -216,6 +219,7 @@ MOODS = {
     "ruins": {
         "fa": "ویرونه",
         "emoji": "🏚",
+        "emojis": ["🏚", "🍂", "🌫"],
         "queries": [
             "abandoned house night fog", "dark forest lone tree",
             "old ruins moonlight", "misty valley dark",
@@ -234,7 +238,7 @@ MOODS = {
     },
 }
 
-# برای تگ کردن آهنگ‌ها تو کپشن MP3 (فارسی، انگلیسی یا فینگلیش)
+# کلیدواژه‌های تشخیص حس آهنگ (فارسی، انگلیسی، فینگلیش)
 MOOD_ALIASES = {
     "rain": ["rain", "بارون", "باران", "barun", "baran", "baroon"],
     "night": ["night", "شب", "shab"],
@@ -281,7 +285,6 @@ def load_library():
             data = {}
     data.setdefault("tracks", [])
     data.setdefault("unplayed", [])
-    data.setdefault("stickers", [])
     return data
 
 
@@ -309,13 +312,13 @@ def is_admin(update: Update) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# کپشن — از همان حسِ عکس، بدون تکرار (per-mood)
+# کپشن — متن هم‌حس + ایموجی مرتبط، بدون تکرار
 # ---------------------------------------------------------------------------
 def pick_caption(mood):
     pool = MOODS[mood]["captions"]
     state = load_state()
     used_map = state.get("caption_used", {})
-    if not isinstance(used_map, dict):  # سازگاری با فرمت قدیمی
+    if not isinstance(used_map, dict):
         used_map = {}
     used = set(used_map.get(mood, []))
     remaining = [i for i in range(len(pool)) if i not in used]
@@ -330,64 +333,14 @@ def pick_caption(mood):
 
 
 def build_main_caption(mood):
-    return f"{pick_caption(mood)}\n\n{SIGNATURE}"
+    """متن سنگین + یه ایموجی مرتبط با حسش + امضا"""
+    text = pick_caption(mood)
+    emoji = random.choice(MOODS[mood]["emojis"])
+    return f"{text} {emoji}\n\n{SIGNATURE}"
 
 
 # ---------------------------------------------------------------------------
-# استیکر
-# ---------------------------------------------------------------------------
-def _pack_stickers():
-    return load_state().get("pack_stickers", [])
-
-
-def sticker_pool():
-    lib = load_library()
-    return [s["file_id"] for s in lib["stickers"]] + _pack_stickers()
-
-
-def remove_sticker(file_id):
-    lib = load_library()
-    if any(s["file_id"] == file_id for s in lib["stickers"]):
-        lib["stickers"] = [s for s in lib["stickers"] if s["file_id"] != file_id]
-        save_library(lib)
-    save_state({"pack_stickers": [f for f in _pack_stickers() if f != file_id]})
-
-
-async def send_random_sticker(context, chat_id, reply_to=None):
-    pool = sticker_pool()
-    if not pool:
-        return None
-    tried = set()
-    for _ in range(3):
-        remaining = [f for f in pool if f not in tried]
-        if not remaining:
-            return None
-        fid = random.choice(remaining)
-        tried.add(fid)
-        try:
-            return await context.bot.send_sticker(
-                chat_id=chat_id, sticker=fid, reply_to_message_id=reply_to
-            )
-        except Exception as e:
-            logger.warning(f"sticker send failed, removing: {e}")
-            remove_sticker(fid)
-    return None
-
-
-async def refresh_sticker_pack(context: ContextTypes.DEFAULT_TYPE):
-    if not STICKER_SET:
-        return
-    try:
-        s = await context.bot.get_sticker_set(STICKER_SET)
-        ids = [st.file_id for st in s.stickers]
-        save_state({"pack_stickers": ids})
-        logger.info(f"Loaded {len(ids)} stickers from pack '{STICKER_SET}'")
-    except Exception as e:
-        logger.warning(f"Could not load sticker pack '{STICKER_SET}': {e}")
-
-
-# ---------------------------------------------------------------------------
-# آهنگ — چرخه‌ی بدون تکرار + اولویتِ آهنگِ هم‌حس با عکس
+# آهنگ — چرخه‌ی بدون تکرار + اولویت آهنگ هم‌حس با عکس
 # ---------------------------------------------------------------------------
 def get_next_track(mood=None, peek=False):
     lib = load_library()
@@ -395,7 +348,6 @@ def get_next_track(mood=None, peek=False):
         return None
 
     if peek:
-        # برای پیش‌نمایش: چیزی مصرف نمی‌شه
         if mood:
             same_mood = [t for t in lib["tracks"] if t.get("mood") == mood]
             if same_mood:
@@ -406,7 +358,6 @@ def get_next_track(mood=None, peek=False):
         lib["unplayed"] = [t["file_id"] for t in lib["tracks"]]
         random.shuffle(lib["unplayed"])
 
-    # اولویت با آهنگِ هم‌حس عکس (بدون شکستن قانون عدم تکرار)
     chosen = lib["unplayed"][0]
     if mood:
         mood_by_id = {t["file_id"]: t.get("mood") for t in lib["tracks"]}
@@ -473,7 +424,7 @@ def delete_track_by_number(n):
 
 
 # ---------------------------------------------------------------------------
-# Pexels — کوئری از همان حس
+# Pexels — دارک: فیلتر رنگ مشکی + انتخاب تاریک‌ترین‌ها
 # ---------------------------------------------------------------------------
 def _luminance(hex_color):
     """روشنایی رنگ میانگین عکس (۰=تاریک، ۲۵۵=روشن)."""
@@ -486,19 +437,17 @@ def _luminance(hex_color):
 
 
 def _pick_dark_photo(photos):
-    """از بین نتایج، قشنگ‌ترینِ تاریک‌ها (فضای دارک مینیمال)."""
+    """از بین نتایج، تاریک‌ترین‌ها انتخاب می‌شن (فضای دارک مینیمال)."""
     scored = [(_luminance(p.get("avg_color") or "#808080"), p) for p in photos]
     very_dark = [p for lum, p in scored if lum < 55]
     if very_dark:
         return random.choice(very_dark)
-    # اگه هیچ‌کدوم خیلی تاریک نبودن، نیمه‌ی تاریک‌تر لیست
     darkest_half = sorted(scored, key=lambda x: x[0])[: max(1, len(scored) // 2)]
     return random.choice(darkest_half)[1]
 
 
 def fetch_pexels_photo(mood):
     queries = MOODS[mood]["queries"]
-    # تلاش‌ها: اول با فیلتر رنگ مشکی (عکس‌های دارک)، بعد بدون فیلتر
     plans = [
         (random.choice(queries), "black", random.randint(1, 8)),
         (random.choice(queries), "black", 1),
@@ -513,7 +462,7 @@ def fetch_pexels_photo(mood):
             "orientation": "portrait", "size": "large",
         }
         if color:
-            params["color"] = color  # فقط نتایج با غلبه‌ی رنگ تیره
+            params["color"] = color
         try:
             resp = requests.get(
                 "https://api.pexels.com/v1/search",
@@ -548,8 +497,8 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
 
 
 async def publish_post(context, chat_id, consume_music=True):
-    """ست کامل پست: عکس/متن (هم‌حس) + استیکر + آهنگ (ترجیحاً هم‌حس)."""
-    result = {"posted": False, "music": False, "sticker": False, "mood": None}
+    """ست کامل پست: عکس/متن (هم‌حس + ایموجی مرتبط) + آهنگ (ترجیحاً هم‌حس)."""
+    result = {"posted": False, "music": False, "mood": None}
 
     mood = random.choice(list(MOODS.keys()))
     result["mood"] = mood
@@ -563,9 +512,6 @@ async def publish_post(context, chat_id, consume_music=True):
     else:
         main_msg = await context.bot.send_message(chat_id=chat_id, text=caption)
     result["posted"] = True
-
-    if await send_random_sticker(context, chat_id, reply_to=main_msg.message_id):
-        result["sticker"] = True
 
     track = get_next_track(mood=mood, peek=not consume_music)
     if track:
@@ -604,8 +550,6 @@ def _post_result_text(result):
     mood = result["mood"]
     mood_fa = f"{MOODS[mood]['fa']} {MOODS[mood]['emoji']}" if mood else "؟"
     bits = ["عکس" if PHOTO_MODE else "متن"]
-    if result["sticker"]:
-        bits.append("استیکر")
     bits.append("آهنگ" if result["music"] else "بدون آهنگ (کتابخونه خالیه)")
     return f"✅ پست شد — حس: {mood_fa}\n{' + '.join(bits)}"
 
@@ -655,12 +599,11 @@ def _stats_text(context=None):
         f"📢 چنل: {CHANNEL_ID}",
         f"⏯ وضعیت: {'⏸ متوقف' if state.get('is_paused') else '▶️ فعال'}",
         f"📮 پست‌ها: {state.get('post_count', 0)}",
-        f"🧩 حالت: {'📸 عکس + متن' if PHOTO_MODE else '📝 متن ساده'} + 🎭 + 🎧",
-        f"🌗 آخرین حس: {MOODS[last_mood]['fa']} {MOODS[last_mood]['emoji']}" if last_mood else "",
-        f"🎵 آهنگ‌ها: {len(lib['tracks'])} (حس‌دار: {tagged}؛ تو چرخه: {len(lib['unplayed'])})",
-        f"🎭 استیکرها: {len(lib['stickers']) + len(_pack_stickers())}",
+        f"🧩 حالت: {'📸 عکس + متن' if PHOTO_MODE else '📝 متن ساده'} + 🎧",
     ]
-    lines = [l for l in lines if l]
+    if last_mood:
+        lines.append(f"🌗 آخرین حس: {MOODS[last_mood]['fa']} {MOODS[last_mood]['emoji']}")
+    lines.append(f"🎵 آهنگ‌ها: {len(lib['tracks'])} (حس‌دار: {tagged}؛ تو چرخه: {len(lib['unplayed'])})")
     if POST_INTERVAL_HOURS:
         lines.append(f"⏰ هر {POST_INTERVAL_HOURS} ساعت")
     else:
@@ -694,29 +637,18 @@ def _songs_text():
     return "\n".join(lines)
 
 
-def _stickers_text():
-    lib = load_library()
-    return (
-        "🎭 کتابخونه‌ی استیکر:\n\n"
-        f"• فرستاده‌شده توسط تو: {len(lib['stickers'])}\n"
-        f"• از پک {STICKER_SET or '—'}: {len(_pack_stickers())}\n\n"
-        "استیکر رو همینجا بفرست تا اضافه بشه؛ یا STICKER_SET رو به اسم یه پک عمومی ست کن."
-    )
-
-
 _MOODS_FA = "، ".join(m["fa"] + " " + m["emoji"] for m in MOODS.values())
 
 HELP_TEXT = (
     "سلام! Silent Ruins 🥀\n\n"
-    "هر پست یه ستِ هم‌حسه: عکس دپ ← کپشن مرتبط ← استیکر ← آهنگ مرتبط\n"
+    "هر پست یه ستِ هم‌حسه: عکس دپ ← کپشن سنگین + ایموجی مرتبط ← آهنگ هم‌حس\n"
     f"حس‌ها: {_MOODS_FA}\n\n"
-    "➕ آهنگ: MP3 رو اینجا بفرست (می‌تونی موقع ارسال تو کپشن حسش رو هم بنویسی: "
-    "بارون / شب / تنهایی / دلتنگی / خستگی / ویرونه)\n"
-    "➕ استیکر: استیکر رو همینجا بفرست\n\n"
+    "➕ آهنگ: MP3 رو همینجا بفرست (می‌تونی موقع ارسال تو کپشن حسش رو هم بنویسی: "
+    "بارون / شب / تنهایی / دلتنگی / خستگی / ویرونه)\n\n"
     "دستورات:\n"
     "/panel — پنل شیشه‌ای مدیریت 🎛\n"
     "/post پست فوری • /preview پیش‌نمایش\n"
-    "/songs آهنگ‌ها • /del حذف • /stickers استیکرها\n"
+    "/songs آهنگ‌ها • /del حذف آهنگ\n"
     "/pause توقف • /resume ادامه • /stats آمار • /id آیدی"
 )
 
@@ -732,7 +664,7 @@ def _panel_text():
         "— — — — — — — — —\n"
         f"📢 {CHANNEL_ID}\n"
         f"{'⏸ متوقفه' if state.get('is_paused') else '▶️ فعاله'}  •  📮 {state.get('post_count', 0)} پست\n"
-        f"🎵 {len(lib['tracks'])} آهنگ  •  🎭 {len(lib['stickers']) + len(_pack_stickers())} استیکر\n"
+        f"🎵 {len(lib['tracks'])} آهنگ\n"
         "— — — — — — — — —"
     )
 
@@ -745,7 +677,6 @@ def _panel_markup():
         [
             InlineKeyboardButton("📊 آمار", callback_data="p:stats"),
             InlineKeyboardButton("🎵 آهنگ‌ها", callback_data="p:songs"),
-            InlineKeyboardButton("🎭 استیکر", callback_data="p:stickers"),
         ],
         [
             InlineKeyboardButton(
@@ -783,9 +714,6 @@ async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "p:songs":
         await q.answer()
         await q.message.reply_text(_songs_text())
-    elif data == "p:stickers":
-        await q.answer()
-        await q.message.reply_text(_stickers_text())
     elif data == "p:preview":
         await q.answer("👁 داره ساخته می‌شه…")
         try:
@@ -833,8 +761,6 @@ async def preview_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"🌗 حس این پست: {MOODS[mood]['fa']} {MOODS[mood]['emoji']}")
         if not result["music"]:
             await update.message.reply_text("🎵 کتابخونه‌ی آهنگ خالیه — MP3 بفرست.")
-        if not result["sticker"]:
-            await update.message.reply_text("🎭 استیکری نداری — بفرست یا STICKER_SET ست کن.")
     except Exception as e:
         await update.message.reply_text(f"❌ خطا تو پیش‌نمایش: {e}")
 
@@ -890,14 +816,8 @@ async def del_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ این شماره تو کتابخونه نیست.")
 
 
-async def stickers_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    await update.message.reply_text(_stickers_text())
-
-
 # ---------------------------------------------------------------------------
-# دریافت آهنگ و استیکر
+# دریافت آهنگ
 # ---------------------------------------------------------------------------
 def _detect_mood(text):
     text = (text or "").lower()
@@ -941,7 +861,6 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
     caption_text = msg.caption or ""
     mood = _detect_mood(caption_text)
 
-    # کپشن «خواننده - ترک»
     if caption_text and "-" in caption_text and not performer:
         parts = [p.strip() for p in caption_text.split("-", 1)]
         if parts[0] and not _detect_mood(parts[0]):
@@ -988,23 +907,6 @@ async def receive_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ خطا در ذخیره آهنگ: {e}")
 
 
-async def receive_sticker(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    st = update.message.sticker
-    if not st:
-        return
-    lib = load_library()
-    if any(s["file_id"] == st.file_id for s in lib["stickers"]):
-        await update.message.reply_text("🎭 این استیکر رو از قبل دارم.")
-        return
-    lib["stickers"].append({"file_id": st.file_id, "emoji": st.emoji or ""})
-    save_library(lib)
-    await update.message.reply_text(
-        f"✅ استیکر اضافه شد {st.emoji or ''} (مجموع: {len(lib['stickers'])})"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
@@ -1027,7 +929,6 @@ def main():
     app.add_handler(CommandHandler("status", stats_cmd))  # legacy
     app.add_handler(CommandHandler("songs", songs_cmd))
     app.add_handler(CommandHandler(["del", "delete"], del_cmd))
-    app.add_handler(CommandHandler("stickers", stickers_cmd))
     app.add_handler(CommandHandler("panel", panel_cmd))
     app.add_handler(CallbackQueryHandler(panel_callback, pattern=r"^p:"))
 
@@ -1036,9 +937,6 @@ def main():
             filters.ChatType.PRIVATE & (filters.AUDIO | filters.VOICE | filters.Document.ALL),
             receive_audio,
         )
-    )
-    app.add_handler(
-        MessageHandler(filters.ChatType.PRIVATE & filters.Sticker.ALL, receive_sticker)
     )
 
     jq = app.job_queue
@@ -1061,12 +959,9 @@ def main():
             except ValueError:
                 logger.warning(f"Invalid MUSIC_TIME '{t}'")
 
-    if STICKER_SET:
-        jq.run_once(refresh_sticker_pack, 3)
-
     logger.info(
         f"Silent Ruins 🥀 started | channel={CHANNEL_ID} | mode={'photos' if PHOTO_MODE else 'text-only'} | "
-        f"times={POST_TIMES} | sticker_set={STICKER_SET or '-'}"
+        f"times={POST_TIMES}"
     )
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
