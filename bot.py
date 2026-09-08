@@ -9,7 +9,7 @@ SilentRuins Bot 🥀 — Pro Edition
 - 🎭 کتابخونه‌ی استیکر: استیکر موردعلاقه‌ات رو تو پیوی می‌فرستی، یا یه پک عمومی معرفی می‌کنی
 - 🔁 بدون تکرار: نه آهنگ تکراری می‌شه، نه کپشن — تا همه یک دور رد نشن
 - 👁 پیش‌نمایش: قبل از انتشار، نمونه‌ی پست رو تو پیوی خودت ببین (/preview)
-- 📸 اگه عکس بخوای: SEND_PHOTOS=true → پست‌ها عکس Pexels هم می‌گیرن (پیش‌فرض: خاموش)
+- 📸 پست‌ها: عکس Pexels + کپشن ساده + استیکر + آهنگ (بدون عکس: SEND_PHOTOS=false)
 """
 
 import asyncio
@@ -51,19 +51,24 @@ def _env_flag(name, default=False):
     )
 
 
-# حالت عکس‌دار (پیش‌فرض خاموش — فقط متن + استیکر + آهنگ)
-SEND_PHOTOS = _env_flag("SEND_PHOTOS", False)
+# حالت عکس‌دار (پیش‌فرض روشن — عکس + کپشن ساده + استیکر + آهنگ)
+SEND_PHOTOS = _env_flag("SEND_PHOTOS", True)
 
 # منشن آیدی چنل ته کپشن پست اصلی
 SHOW_CHANNEL_TAG = _env_flag("SHOW_CHANNEL_TAG", True)
+
+# نوشتن اسم عکاس ته کپشن عکس (پیش‌فرض خاموش — کپشن ساده می‌مونه)
+PHOTO_CREDIT = _env_flag("PHOTO_CREDIT", False)
 
 PEXELS_API_KEY = (
     os.getenv("PEXELS_API_KEY")
     or os.getenv("PIXEL_API_KEY")
     or os.getenv("UNSPLASH_ACCESS_KEY")
 )
+# اگه عکس روشنه ولی کلید نیست، کرش نمی‌کنیم؛ فقط موقتاً متنی کار می‌کنیم
+PHOTO_MODE = SEND_PHOTOS and bool(PEXELS_API_KEY)
 if SEND_PHOTOS and not PEXELS_API_KEY:
-    raise RuntimeError("❌ SEND_PHOTOS فعاله ولی PEXELS_API_KEY نیست — از pexels.com/api رایگان بگیر")
+    logging.warning("⚠️ SEND_PHOTOS روشنه ولی PEXELS_API_KEY نیست — فعلاً فقط متن پست می‌شه")
 
 # پک استیکر عمومی تلگرام (اختیاری) — مثلاً STICKER_SET=SadHamster
 # اگه خالی باشه، فقط استیکرهایی که خودت تو پیوی می‌فرستی استفاده می‌شن
@@ -492,10 +497,11 @@ async def publish_post(context, chat_id, consume_music=True):
     result = {"posted": False, "music": False, "sticker": False}
 
     caption = build_caption()
-    if SEND_PHOTOS:
+    if PHOTO_MODE:
         url, photographer, query = await asyncio.to_thread(fetch_pexels_photo)
-        full_caption = f"{caption}\n\n📷 {photographer} / Pexels"
-        main_msg = await context.bot.send_photo(chat_id=chat_id, photo=url, caption=full_caption)
+        if PHOTO_CREDIT:
+            caption = f"{caption}\n\n📷 {photographer}"
+        main_msg = await context.bot.send_photo(chat_id=chat_id, photo=url, caption=caption)
     else:
         main_msg = await context.bot.send_message(chat_id=chat_id, text=caption)
     result["posted"] = True
@@ -575,7 +581,7 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "سلام 🥀\nاین ربات شخصیه و دستوراتش فقط برای ادمینه."
         )
         return
-    mode = "📸 عکس + متن" if SEND_PHOTOS else "📝 متن ساده"
+    mode = "📸 عکس + متن" if PHOTO_MODE else "📝 متن ساده"
     await update.message.reply_text(
         "سلام! Silent Ruins 🥀 روشنه.\n\n"
         f"حالت پست: {mode} + 🎭 استیکر + 🎧 آهنگ\n"
@@ -608,7 +614,7 @@ async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = await post_combined_job(context)
     if result and result.get("posted"):
         bits = []
-        if SEND_PHOTOS:
+        if PHOTO_MODE:
             bits.append("عکس")
         else:
             bits.append("متن")
@@ -667,7 +673,7 @@ async def stats_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     lib = load_library()
     state = load_state()
-    mode = "📸 عکس + متن" if SEND_PHOTOS else "📝 متن ساده"
+    mode = "📸 عکس + متن" if PHOTO_MODE else "📝 متن ساده"
     lines = [
         "📊 آمار Silent Ruins 🥀",
         "",
@@ -913,7 +919,7 @@ def main():
         jq.run_once(refresh_sticker_pack, 3)
 
     logger.info(
-        f"Silent Ruins 🥀 started | channel={CHANNEL_ID} | mode={'photos' if SEND_PHOTOS else 'text-only'} | "
+        f"Silent Ruins 🥀 started | channel={CHANNEL_ID} | mode={'photos' if PHOTO_MODE else 'text-only'} | "
         f"times={POST_TIMES} | interval={POST_INTERVAL_HOURS} | stickers_set={STICKER_SET or '-'}"
     )
     app.run_polling(allowed_updates=Update.ALL_TYPES)
