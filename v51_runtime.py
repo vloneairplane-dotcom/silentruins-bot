@@ -1,7 +1,8 @@
-"""SilentRuins v5.1 editorial runtime."""
+"""SilentRuins v5.2 editorial runtime."""
 from __future__ import annotations
 import io, random
 from datetime import datetime
+
 
 def main():
     import content_engine as e
@@ -9,12 +10,16 @@ def main():
 
     def mood(state, hour=None):
         hour = datetime.now().hour if hour is None else hour
-        if 22 <= hour or hour < 5: pool=["night","lonely","love","ruins"]
-        elif 17 <= hour < 22: pool=["love","lonely","night","rain","ruins"]
-        elif 12 <= hour < 17: pool=["tired","love","rain","lonely"]
-        else: pool=["rain","tired","love","lonely"]
-        recent=list(state.get("recent_moods",[]))[-2:]
-        previews=list(state.get("preview_moods",[]))[-3:]
+        if 22 <= hour or hour < 5:
+            pool=["night","lonely","love","ruins"]
+        elif 17 <= hour < 22:
+            pool=["love","lonely","night","rain","ruins"]
+        elif 12 <= hour < 17:
+            pool=["tired","love","rain","lonely"]
+        else:
+            pool=["rain","tired","love","lonely"]
+        recent=list(state.get("recent_moods",[]))[-3:]
+        previews=list(state.get("preview_moods",[]))[-4:]
         blocked=set(recent+previews)
         choices=[m for m in pool if m not in blocked] or [m for m in pool if m not in recent[-1:]] or pool
         counts={m:recent.count(m)+previews.count(m) for m in choices}
@@ -42,19 +47,72 @@ def main():
         if len(e.normalize(photo.get("alt","")))<10: s-=.06
         return max(0,min(1,s))
 
-    old_music=e.music_score
+    # Music matching is intentionally semantic rather than dependent on one exact
+    # library label. Existing uploads may use labels such as Heartbreak, Missing,
+    # Sadness, Dark, Emotional, Memories, etc.
+    MUSIC_TAG_GROUPS = {
+        "heartbreak": {"love","lonely","night","rain"},
+        "breakup": {"love","lonely","night"},
+        "missing": {"love","lonely","night","rain","ruins"},
+        "memories": {"love","lonely","night","rain","ruins"},
+        "memory": {"love","lonely","night","rain","ruins"},
+        "sadness": {"rain","tired","lonely","night","ruins"},
+        "sad": {"rain","tired","lonely","night","ruins","love"},
+        "emotional": {"night","lonely","love","tired","rain","ruins"},
+        "melancholy": {"rain","night","lonely","ruins","tired","love"},
+        "dark": {"night","ruins","lonely","tired"},
+        "loneliness": {"lonely","night","ruins"},
+        "lonely": {"lonely","night"},
+        "night": {"night","lonely"},
+        "rain": {"rain","night","lonely"},
+        "regret": {"love","tired","lonely","night"},
+        "distance": {"love","lonely","night"},
+        "romantic": {"love"},
+        "unrequited love": {"love","lonely"},
+        "betrayal": {"love","lonely","tired"},
+        "breakdown": {"tired","lonely","night"},
+        "depression": {"tired","lonely","ruins","night"},
+        "calm": {"rain","night"},
+        "piano": {"night","rain","lonely","tired"},
+        "ambient": {"night","rain","ruins","lonely"},
+    }
+
     def music_score(track,m):
         if not track: return .15
-        tagged=e.normalize(track.get("mood")); text=e.normalize(f"{track.get('title','')} {track.get('performer','')} {tagged}")
+        tagged=e.normalize(track.get("mood"))
+        title=e.normalize(track.get("title"))
+        performer=e.normalize(track.get("performer"))
+        text=e.normalize(f"{title} {performer} {tagged}")
+
+        # Exact mood labels are strongest.
+        if tagged == m:
+            return 1.0
+
+        # Recognise common library labels even when they are not in the original
+        # engine's map. This prevents generic 58-ish scores for clearly sad tracks.
+        group_hits=[]
+        for label, moods in MUSIC_TAG_GROUPS.items():
+            if label in tagged or label in text:
+                group_hits.append((label,moods))
+        if group_hits:
+            if any(m in moods for _,moods in group_hits):
+                best=.88
+                if any(label in tagged for label,_ in group_hits): best=.93
+                return best
+            # A clearly melancholic track can still be a reasonable night fallback,
+            # but should not outrank an actual mood match.
+            if m in {"night","lonely","ruins","rain","tired"}:
+                return .72
+
+        # Preserve the original engine's title/performer/tag matching as a fallback.
+        old=e.music_score(track,m)
         direct=sum(1 for w in e.MOOD_ALIASES[m] if e.normalize(w) in text)
-        s=old_music(track,m)
-        if tagged==m: s=1.0
-        return max(0,min(1,max(s,.58+direct*.08)))
+        return max(.60, old, min(.84,.56+direct*.08))
 
     def quality(m,caption,track,photo):
         t=e.caption_score(caption,m); ms=music_score(track,m); im=image_score(photo,m)
-        c=max(0,min(1,.28*t+.38*ms+.34*im))
-        overall=round((t*.30+im*.32+ms*.25+c*.13)*100)
+        c=max(0,min(1,.24*t+.42*ms+.34*im))
+        overall=round((t*.30+im*.31+ms*.27+c*.12)*100)
         return {"text":round(t*100),"image":round(im*100),"music":round(ms*100),"coherence":round(c*100),"overall":max(0,min(100,overall))}
 
     e.choose_mood=mood; e.image_score=image_score; e.music_score=music_score; e.quality_score=quality
@@ -77,13 +135,13 @@ def main():
 
     def build(preview=False):
         state=bot.load_state(); lib=bot.load_library(); best=None
-        for _ in range(max(10,bot.MAX_ATTEMPTS)):
+        for _ in range(max(12,bot.MAX_ATTEMPTS)):
             m=mood(state); c=e.choose_caption(m,state.get("recent_caption_hashes",[]))
             tr=e.choose_music(lib["tracks"],m,state.get("recent_track_ids",[]),state.get("preview_track_ids",[]) if preview else [])
             ph=pick(photos(m,state),m) if bot.SEND_PHOTOS else None
             sc=quality(m,c,tr,ph); pack={"mood":m,"caption":c,"track":tr,"photo":ph,"score":sc}
             if best is None or sc["overall"]>best["score"]["overall"]: best=pack
-            if sc["overall"]>=max(82,bot.QUALITY_THRESHOLD) and sc["image"]>=72 and sc["music"]>=70: break
+            if sc["overall"]>=max(82,bot.QUALITY_THRESHOLD) and sc["image"]>=72 and sc["music"]>=72: break
         if preview and best:
             s=bot.load_state(); s["preview_moods"]=(s.get("preview_moods",[])+[best["mood"]])[-12:]; bot.save_state(s)
         return best
