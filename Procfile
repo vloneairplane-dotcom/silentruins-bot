@@ -1,1 +1,1 @@
-worker: python bot.py
+worker: python runtime_guard.py
