@@ -340,7 +340,8 @@ def choose_caption(mood, state=None):
     remaining = [i for i in range(len(pool)) if i not in used]
     if not remaining:
         remaining = list(range(len(pool)))
-    return random.choice(remaining), pool[random.choice(remaining)]
+    idx = random.choice(remaining)
+    return idx, pool[idx]
 
 
 def commit_caption(mood, idx):
@@ -604,6 +605,13 @@ async def publish_post(context, chat_id, consume_music=True):
 
     if best is None:
         raise RuntimeError("نتونستم یک ترکیب تازه و غیرتکراری بسازم")
+
+    # A quality threshold is a real publishing gate, not just a target.
+    # Never publish a weak candidate in production. Preview can still show it.
+    if consume_music and best["overall"] < QUALITY_THRESHOLD:
+        raise RuntimeError(
+            f"هیچ ترکیب باکیفیتی پیدا نشد (بهترین امتیاز: {best['overall']}/100، حداقل: {QUALITY_THRESHOLD}/100)"
+        )
 
     mood = best["mood"]
     caption = best["caption"]

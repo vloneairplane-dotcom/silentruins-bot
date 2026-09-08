@@ -28,7 +28,7 @@ def choose_mood(moods: dict, state: dict, local_hour: int | None = None) -> str:
     recent = recent[-4:]
 
     windows = {
-        # calm daytime
+        # Strong time-of-day identity. Secondary moods retain some variety.
         "rain": set(range(7, 12)),
         "tired": set(range(12, 17)),
         "love": set(range(17, 21)),
@@ -44,7 +44,7 @@ def choose_mood(moods: dict, state: dict, local_hour: int | None = None) -> str:
     for mood in candidates:
         weight = 1
         if local_hour in windows.get(mood, set()):
-            weight += 5
+            weight += 10
         if recent and recent[-1] == mood:
             weight = 0
         weighted.append((mood, weight))
@@ -68,10 +68,22 @@ def mood_similarity(text: str | None, mood: str, moods: dict, aliases: dict) -> 
 def track_match(track: dict | None, mood: str, moods: dict, aliases: dict) -> float:
     if not track:
         return 0.0
-    tagged = track.get("mood")
-    if tagged == mood:
+    tagged = normalize(track.get("mood"))
+    canonical_aliases = {normalize(a) for a in aliases.get(mood, [])}
+    if tagged == normalize(mood) or tagged in canonical_aliases:
         return 1.0
-    text = f"{track.get('title', '')} {track.get('performer', '')}"
+    # Common natural-language variants used in the music library.
+    variants = {
+        "lonely": {"loneliness"},
+        "love": {"heartbreak", "missing", "regret", "romantic", "unrequited love"},
+        "rain": {"rainy"},
+        "tired": {"exhausted", "breakdown"},
+        "ruins": {"melancholy", "dark"},
+        "night": {"dark night"},
+    }
+    if tagged in variants.get(mood, set()):
+        return 0.95
+    text = f"{track.get('title', '')} {track.get('performer', '')} {track.get('mood', '')}"
     sim = mood_similarity(text, mood, moods, aliases)
     return min(0.75, sim)
 
