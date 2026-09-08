@@ -121,9 +121,9 @@ MOODS = {
         "fa": "بارون",
         "emoji": "🌧",
         "queries": [
-            "rain on window night", "rainy street night dark",
-            "rain drops glass sad", "heavy rain city lights",
-            "person umbrella rain dark", "rain window black and white",
+            "rain window night dark", "rainy street night reflection",
+            "person rain night silhouette", "rain drops glass dark",
+            "woman window rain dark", "alone rain night lights",
         ],
         "captions": [
             "بارون از آسمون نمیاد که زمین رو تمیز کنه؛ میاد که یادش بندازه.",
@@ -140,9 +140,9 @@ MOODS = {
         "fa": "شب",
         "emoji": "🌃",
         "queries": [
-            "dark night city lights", "empty street night neon",
-            "night sky moon dark", "bedroom dark window night",
-            "midnight empty road", "city skyline dark night",
+            "silhouette man night lights", "city night dark minimal",
+            "dark sky moon silhouette", "woman dark room window night",
+            "empty road night lone figure", "night neon alley alone",
         ],
         "captions": [
             "شب که می‌شه، آدم با خودش رورو می‌شه؛ و خودش بدترین قراره.",
@@ -160,9 +160,9 @@ MOODS = {
         "fa": "تنهایی",
         "emoji": "🚶",
         "queries": [
-            "alone dark room", "lonely person silhouette",
-            "empty bench fog", "person walking alone night",
-            "solitude dark aesthetic", "man sitting alone dark",
+            "man silhouette alone dark", "person sitting alone night",
+            "woman alone window silhouette", "lone bench night fog",
+            "figure walking darkness", "single person dark minimal",
         ],
         "captions": [
             "بلد بودن آدم‌ها خیلی مهم‌تر از دوست داشتنشونه.",
@@ -179,9 +179,9 @@ MOODS = {
         "fa": "دلتنگی",
         "emoji": "🥀",
         "queries": [
-            "old photos memories", "withered roses dark",
-            "letter paper vintage dark", "empty bed sadness",
-            "red rose black background", "couple shadow far away",
+            "withered rose dark background", "old photograph dark aesthetic",
+            "letter candle dark room", "empty bed night dark",
+            "single red rose black", "silhouette couple distance night",
         ],
         "captions": [
             "تابستون فصل عجیبیه؛ همیشه یا یه آدم مهم میاد تو زندگیت، یا یه آدم مهم از زندگیت می‌ره.",
@@ -198,9 +198,9 @@ MOODS = {
         "fa": "خستگی",
         "emoji": "🕯",
         "queries": [
-            "tired person dark", "sad eyes close up",
-            "cigarette smoke night", "broken mirror dark",
-            "crying silhouette dark", "candle dark room",
+            "tired eyes close up dark", "smoke night silhouette man",
+            "candle flame dark room", "person hood alone dark",
+            "broken mirror silhouette", "silhouette head down dark",
         ],
         "captions": [
             "ترسناک‌ترین اتفاقی که می‌تونه برای یه نفر بیوفته «بی‌تفاوت» شدنه.",
@@ -217,9 +217,9 @@ MOODS = {
         "fa": "ویرونه",
         "emoji": "🏚",
         "queries": [
-            "abandoned house dark", "foggy forest path",
-            "old ruins fog", "misty mountains dark",
-            "gothic architecture dark", "abandoned building night",
+            "abandoned house night fog", "dark forest lone tree",
+            "old ruins moonlight", "misty valley dark",
+            "gothic window dark", "dead tree dark sky",
         ],
         "captions": [
             "نگران اومدن پاییز باشم؟ مگه تو باغ ما گلی باقی‌مونده؟ لاله‌های وطن توی زمستون از دست رفتن.",
@@ -475,18 +475,49 @@ def delete_track_by_number(n):
 # ---------------------------------------------------------------------------
 # Pexels — کوئری از همان حس
 # ---------------------------------------------------------------------------
+def _luminance(hex_color):
+    """روشنایی رنگ میانگین عکس (۰=تاریک، ۲۵۵=روشن)."""
+    try:
+        h = hex_color.lstrip("#")
+        r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+    except Exception:
+        return 128
+
+
+def _pick_dark_photo(photos):
+    """از بین نتایج، قشنگ‌ترینِ تاریک‌ها (فضای دارک مینیمال)."""
+    scored = [(_luminance(p.get("avg_color") or "#808080"), p) for p in photos]
+    very_dark = [p for lum, p in scored if lum < 55]
+    if very_dark:
+        return random.choice(very_dark)
+    # اگه هیچ‌کدوم خیلی تاریک نبودن، نیمه‌ی تاریک‌تر لیست
+    darkest_half = sorted(scored, key=lambda x: x[0])[: max(1, len(scored) // 2)]
+    return random.choice(darkest_half)[1]
+
+
 def fetch_pexels_photo(mood):
     queries = MOODS[mood]["queries"]
-    for attempt in range(6):
-        query = random.choice(queries) if attempt < 4 else "dark moody aesthetic"
-        page = random.randint(1, 10) if attempt % 2 == 0 else 1
+    # تلاش‌ها: اول با فیلتر رنگ مشکی (عکس‌های دارک)، بعد بدون فیلتر
+    plans = [
+        (random.choice(queries), "black", random.randint(1, 8)),
+        (random.choice(queries), "black", 1),
+        (random.choice(queries), None, random.randint(1, 8)),
+        (random.choice(queries), "black", random.randint(1, 8)),
+        ("dark moody aesthetic", "black", random.randint(1, 5)),
+        ("dark night silhouette", None, 1),
+    ]
+    for query, color, page in plans:
+        params = {
+            "query": query, "per_page": 30, "page": page,
+            "orientation": "portrait", "size": "large",
+        }
+        if color:
+            params["color"] = color  # فقط نتایج با غلبه‌ی رنگ تیره
         try:
             resp = requests.get(
                 "https://api.pexels.com/v1/search",
-                params={
-                    "query": query, "per_page": 30, "page": page,
-                    "orientation": "portrait", "size": "large",
-                },
+                params=params,
                 headers={"Authorization": PEXELS_API_KEY},
                 timeout=20,
             )
@@ -494,13 +525,13 @@ def fetch_pexels_photo(mood):
             photos = resp.json().get("photos", [])
             if not photos:
                 continue
-            photo = random.choice(photos)
+            photo = _pick_dark_photo(photos)
             src = photo.get("src", {})
             url = src.get("large2x") or src.get("large") or src.get("original")
             save_state({"last_query": query})
             return url, photo.get("photographer", "Pexels"), query
         except requests.RequestException as e:
-            logger.warning(f"Pexels attempt {attempt+1} failed ('{query}'): {e}")
+            logger.warning(f"Pexels attempt failed ('{query}' p{page}): {e}")
             time_module.sleep(1)
     raise RuntimeError("نتونستم از Pexels عکس بگیرم — همه تلاش‌ها شکست خورد")
 
