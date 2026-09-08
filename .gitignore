@@ -1,7 +1,15 @@
+# فایل محرمانه — هرگز کامیت نکن
 .env
-__pycache__/
+
+# دیتای زمان اجرا
 library.json
 state.json
-music/*.mp3
-music/*.m4a
-music/*.ogg
+
+# فایل‌های صوتی دانلودشده
+music/*
+!music/.gitkeep
+
+__pycache__/
+*.pyc
+venv/
+.venv/

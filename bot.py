@@ -3,6 +3,7 @@ SilentRuins Bot 🥀 — Pexels Edition
 Auto-posts sad/dep aesthetic photos from Pexels + Persian sad captions + music to a Telegram channel.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -339,23 +340,27 @@ async def notify_admins(context: ContextTypes.DEFAULT_TYPE, text: str):
 
 
 async def post_combined_job(context: ContextTypes.DEFAULT_TYPE):
-    """The main job: post sad photo with Persian caption, then music if available."""
+    """The main job: post sad photo with Persian caption, then music as a reply
+    to the photo post. Returns "no_music" / "music" on success, False on failure."""
     state = load_state()
     if state.get("is_paused"):
         logger.info("Posting is paused, skipping job")
-        return
+        return False
 
     try:
-        # 1. Fetch photo
-        photo_url, photographer, photographer_url, query, pexels_page = fetch_pexels_photo()
+        # 1. Fetch photo (in a thread so the bot stays responsive meanwhile)
+        photo_url, photographer, photographer_url, query, pexels_page = await asyncio.to_thread(
+            fetch_pexels_photo
+        )
         caption = build_caption()
         full_caption = f"{caption}\n\n📷 {photographer} / Pexels"
 
         # 2. Send photo to channel
-        await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo_url, caption=full_caption)
+        photo_msg = await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo_url, caption=full_caption)
         logger.info(f"Posted photo query='{query}' photographer={photographer}")
 
-        # 3. Try to send music after photo (with small delay)
+        result = "no_music"
+        # 3. Try to send music as a reply to the photo → photo+text+music stay together
         track = get_next_track()
         if track:
             try:
@@ -368,14 +373,17 @@ async def post_combined_job(context: ContextTypes.DEFAULT_TYPE):
                             audio=f,
                             caption=f"🎧 {track.get('title','')} \n{random.choice(PERSIAN_SAD_CAPTIONS)}",
                             title=track.get("title"),
+                            reply_to_message_id=photo_msg.message_id,
                         )
                 else:
                     await context.bot.send_audio(
                         chat_id=CHANNEL_ID,
                         audio=track["file_id"],
                         caption=f"🎧 {track.get('title','')} \n{random.choice(PERSIAN_SAD_CAPTIONS)}",
+                        reply_to_message_id=photo_msg.message_id,
                     )
                 logger.info(f"Posted music: {track.get('title')}")
+                result = "music"
             except Exception as e:
                 logger.exception("Failed to post music")
                 await notify_admins(context, f"⚠️ عکس پست شد ولی موزیک خطا داد: {e}\nTrack: {track.get('title')}")
@@ -387,10 +395,12 @@ async def post_combined_job(context: ContextTypes.DEFAULT_TYPE):
 
         # Update stats
         save_state({"post_count": state.get("post_count", 0) + 1})
+        return result
 
     except Exception as e:
         logger.exception("Failed in post_combined_job")
-        await notify_admins(context, f"⚠️ خطا در پست خودکار: {e}")
+        await notify_admins(context, f"⚠️ خطا در پست خودکار: {e}\n\n(چک کن ربات ادمین چنل باشه و کلید Pexels سالم باشه)")
+        return False
 
 
 # Separate legacy jobs for backward compat
@@ -399,7 +409,9 @@ async def post_photo_only_job(context: ContextTypes.DEFAULT_TYPE):
     if state.get("is_paused"):
         return
     try:
-        photo_url, photographer, photographer_url, query, pexels_page = fetch_pexels_photo()
+        photo_url, photographer, photographer_url, query, pexels_page = await asyncio.to_thread(
+            fetch_pexels_photo
+        )
         caption = build_caption()
         full_caption = f"{caption}\n\n📷 {photographer} / Pexels"
         await context.bot.send_photo(chat_id=CHANNEL_ID, photo=photo_url, caption=full_caption)
@@ -479,8 +491,13 @@ async def post_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
     await update.message.reply_text("⏳ دارم از Pexels عکس غمگین میگیرم و پست میکنم...")
-    await post_combined_job(context)
-    await update.message.reply_text("✅ پست شد!")
+    result = await post_combined_job(context)
+    if result == "music":
+        await update.message.reply_text("✅ عکس + متن + آهنگ تو چنل پست شد!")
+    elif result == "no_music":
+        await update.message.reply_text("✅ عکس پست شد، ولی کتابخونه آهنگ خالیه — MP3 برام بفرست تا پست‌های بعدی آهنگ هم داشته باشن.")
+    else:
+        await update.message.reply_text("❌ پست نشد. خطا رو تو پیوی ربات (همینجا) برات فرستادم.")
 
 
 async def photo_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):

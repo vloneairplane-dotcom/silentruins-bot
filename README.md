@@ -9,17 +9,35 @@
 - ⏰ پست خودکار زمان‌بندی شده
 - 🎛 پنل ادمین کامل
 
+## ⚠️ مهم — امنیت
+
+تو کامیت‌های قبلی این ریپو **توکن واقعی ربات و کلید واقعی Pexels** (مربوط به چنل @songsandscars)
+به‌صورت عمومی قرار داشت. حتی با پاک کردنشون از فایل‌ها، توی تاریخچه‌ی گیت می‌مونن، پس **حتماً**
+این دو کار رو بکن:
+
+1. تو چت **@BotFather** دستور `/revoke` رو بزن → رباتت رو انتخاب کن → **توکن جدید** میگیری
+2. تو **[pexels.com/api/dashboard](https://www.pexels.com/api/dashboard)** کلید قدیمی رو عوض کن (یا کلید جدید بساز)
+
+توکن و کلید جدید رو **فقط** تو فایل `.env` (لوکال) یا Environment Variables هاست بذار —
+فایل `.gitignore` جلوی کامیت شدنش رو میگیره.
+
 ## Environment variables
 
 ```
-BOT_TOKEN=8756529524:AAFyR4Lp6OAf6yAa0CERdW5BdwODu_mgEyo
-PEXELS_API_KEY=7mkEkhNN3yrQ0ob9H1VbQvsWViEPRfmegauy8EeWe4r0ssiPglNU52H2
-ADMIN_IDS=8396139958
-CHANNEL=@songsandscars
+BOT_TOKEN=123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+PEXELS_API_KEY=your_pexels_api_key
+ADMIN_IDS=123456789
+CHANNEL=@yourchannel
 TIMEZONE=Asia/Tehran
 POST_TIMES=10:00,16:00,22:00,02:00
 # یا هر 3 ساعت: POST_INTERVAL_HOURS=3
 ```
+
+- `BOT_TOKEN` → از **@BotFather** با `/newbot`
+- `PEXELS_API_KEY` → از [pexels.com/api](https://www.pexels.com/api/) (رایگان)
+- `ADMIN_IDS` → آیدی عددی خودت از **@userinfobot** (چند نفر؟ با کاما جدا کن)
+- `CHANNEL` → یوزرنیم چنل پابلیک با `@` یا آیدی عددی چنل پرایوت (`-100...`)
+- یادت نره **ربات رو ادمین چنل کنی** با دسترسی Post Messages، وگرنه نمی‌تونه پست بذاره
 
 ## نصب و اجرا
 
@@ -56,6 +74,6 @@ python bot.py
 
 ## Pexels API
 
-از https://www.pexels.com/api/ رایگان بگیر — ماهیانه 200 درخواست رایگان داره که برای 4 پست در روز کافیه.
+از https://www.pexels.com/api/ رایگان بگیر — ساعتی 200 و ماهانه 20,000 درخواست رایگان داره که برای 4 پست در روز خیلی هم کافیه.
 
 عکس‌ها با credit عکاس پست میشن.

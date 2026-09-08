@@ -1,5 +1,0 @@
-.env
-library.json
-__pycache__/
-*.pyc
-venv/
