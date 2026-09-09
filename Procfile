@@ -1,1 +1,1 @@
-worker: python preview_runtime.py
+worker: python panel_runtime.py
