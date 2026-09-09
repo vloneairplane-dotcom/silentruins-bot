@@ -19,10 +19,11 @@ def main():
 
     build_start = source.index("    def build(preview=False):")
     build_end = source.index("\n    bot.build_package = build", build_start)
+    build_assign_end = build_end + len("\n    bot.build_package = build")
 
     choose_replacement = '''    def choose_mood(state, hour=None):
-        # v6: selecting a mood is read-only. Queue advancement happens exactly
-        # once after a successful Preview or successful published post.
+        # v6: read the queue without consuming it. Consumption happens exactly
+        # once after a successful Preview or successfully published post.
         queue = [m for m in state.get("mood_queue", []) if m in ROTATION]
         if not queue:
             history = list(state.get("recent_moods", [])) + list(state.get("preview_moods", []))
@@ -33,18 +34,7 @@ def main():
         return queue[0]
 '''
 
-    build_replacement = '''    def _advance_mood_queue():
-        s = bot.load_state()
-        queue = [m for m in s.get("mood_queue", []) if m in ROTATION]
-        if not queue:
-            queue = list(ROTATION)
-        queue.pop(0)
-        if not queue:
-            queue = list(ROTATION)
-        s["mood_queue"] = queue
-        bot.save_state(s)
-
-    def build(preview=False):
+    build_replacement = '''    def build(preview=False):
         state = bot.load_state()
         lib = profile_library(bot.load_library())
         gate = max(82, bot.QUALITY_THRESHOLD)
@@ -104,22 +94,13 @@ def main():
         return best
 '''
 
-    patched = source[:choose_start] + choose_replacement + source[choose_end:build_start] + build_replacement + source[build_end:]
-    patched = re.sub(r'\nif __name__ == "__main__": main\(\)\s*$', '', patched)
-
-    namespace = {
-        "__name__": "silentruins_v56_embedded",
-        "__file__": str(Path(__file__).with_name("v56_runtime.py")),
-        "ROTATION": ROTATION,
-    }
-    exec(compile(patched, str(Path(__file__).with_name("v56_runtime.py")), "exec"), namespace)
+    queue_commit = '''
 
     # Auto Post advances the queue only after Telegram delivery succeeds.
-    bot = namespace["bot"]
-    original_commit = bot.commit_package
+    original_commit_package = bot.commit_package
 
     def commit_with_queue(package):
-        original_commit(package)
+        original_commit_package(package)
         s = bot.load_state()
         queue = [m for m in s.get("mood_queue", []) if m in ROTATION]
         if queue and queue[0] == package.get("mood"):
@@ -133,8 +114,18 @@ def main():
         bot.save_state(s)
 
     bot.commit_package = commit_with_queue
-    namespace["main_bot"] = bot
-    bot.main()
+'''
+
+    patched = source[:choose_start] + choose_replacement + source[choose_end:build_start] + build_replacement + source[build_end:build_assign_end] + queue_commit + source[build_assign_end:]
+    patched = re.sub(r'\nif __name__ == "__main__": main\(\)\s*$', '', patched)
+
+    namespace = {
+        "__name__": "silentruins_v56_embedded",
+        "__file__": str(Path(__file__).with_name("v56_runtime.py")),
+        "ROTATION": ROTATION,
+    }
+    exec(compile(patched, str(Path(__file__).with_name("v56_runtime.py")), "exec"), namespace)
+    namespace["main"]()
 
 
 if __name__ == "__main__":
