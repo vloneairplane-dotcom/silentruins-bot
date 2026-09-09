@@ -1,7 +1,6 @@
-"""SilentRuins v5.9 launcher.
-Loads the proven v5.6 runtime and replaces mood selection with a deterministic
-editorial rotation. The rotation is shared by Preview and Auto Post so content
-coverage stays balanced across restarts when state is persisted.
+"""SilentRuins v6 runtime launcher.
+Loads the proven v5.6 runtime and installs a deterministic editorial mood queue.
+The queue is persisted in state so Preview and Auto Post share one rotation.
 """
 from __future__ import annotations
 
@@ -17,18 +16,28 @@ def main():
     end = source.index("\n    def visual_score(photo, mood):", start)
 
     replacement = '''    def choose_mood(state, hour=None):
-        # v5.9 Editorial Rotation: deterministic six-mood cycle.
-        # Preview and Auto Post use the same persisted mood history.
-        recent = list(state.get("recent_moods", []))
-        previews = list(state.get("preview_moods", []))
-        history = recent + previews
-        last = history[-1] if history else None
+        # v6: consume a persisted six-mood queue instead of selecting randomly.
+        # The queue is shared by Preview and Auto Post and survives restarts.
+        queue = list(state.get("mood_queue", []))
+        queue = [m for m in queue if m in ROTATION]
 
-        if last in ROTATION:
-            return ROTATION[(ROTATION.index(last) + 1) % len(ROTATION)]
+        if not queue:
+            last = None
+            for item in reversed(list(state.get("recent_moods", [])) + list(state.get("preview_moods", []))):
+                if item in ROTATION:
+                    last = item
+                    break
+            if last in ROTATION:
+                start_index = (ROTATION.index(last) + 1) % len(ROTATION)
+            else:
+                start_index = 0
+            queue = list(ROTATION[start_index:])
+            if not queue:
+                queue = list(ROTATION)
 
-        # If old state has no valid mood, start from rain.
-        return ROTATION[0]
+        mood = queue.pop(0)
+        state["mood_queue"] = queue
+        return mood
 '''
 
     patched = source[:start] + replacement + source[end:]
