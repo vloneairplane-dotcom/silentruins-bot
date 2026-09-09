@@ -1,4 +1,4 @@
-"""SilentRuins Music Intelligence v7.
+"""SilentRuins Music Intelligence v7.1.
 
 Multi-layer soundtrack selection:
 - editorial mood compatibility
@@ -6,7 +6,8 @@ Multi-layer soundtrack selection:
 - title concept matching
 - emotional intensity
 - recent-track diversity
-- deterministic best-first ranking with safe fallback
+- deterministic best-first ranking
+- calibrated fallback for generic legacy uploads
 """
 from __future__ import annotations
 
@@ -14,12 +15,12 @@ import re
 import content_engine as engine
 
 MOOD_TITLE_SIGNALS = {
-    "rain": {"rain", "rainy", "storm", "umbrella", "teardrop", "tears", "falling", "after rain", "rainy days", "apocalypse"},
+    "rain": {"rain", "rainy", "storm", "umbrella", "teardrop", "tears", "falling", "after rain", "rainy days", "apocalypse", "blue", "cry"},
     "love": {"love", "loved", "lovely", "heart", "heartbreak", "broken", "breakup", "sorry", "miss", "missing", "drivers license", "someone you loved", "the night we met", "i miss you", "goodbye", "perfect", "falling", "kiss", "lover"},
     "night": {"night", "midnight", "moon", "dark", "lights", "night we met", "after dark", "city lights", "nightmare", "3am", "midnight"},
     "lonely": {"lonely", "alone", "all by myself", "nobody", "someone you loved", "missing", "empty", "lost", "home", "without you", "solitude", "nobody gets me"},
-    "tired": {"tired", "exhausted", "breakdown", "falling apart", "empty", "heavy", "sad", "numb", "burnout", "breathe", "drowning", "hurt", "suffer"},
-    "ruins": {"ruins", "broken", "ashes", "ghost", "memory", "memories", "lost", "empty", "dark", "faded", "gone", "goodbye", "demons", "bury", "grave"},
+    "tired": {"tired", "exhausted", "breakdown", "falling apart", "empty", "heavy", "sad", "numb", "burnout", "breathe", "drowning", "hurt", "suffer", "exhausted"},
+    "ruins": {"ruins", "broken", "ashes", "ghost", "memory", "memories", "lost", "empty", "dark", "faded", "gone", "goodbye", "demons", "bury", "grave", "falling apart"},
 }
 
 PREFERRED_TAGS = {
@@ -38,11 +39,9 @@ TAG_NEIGHBORS = {
 
 DEFAULT_LEGACY_TAGS = {"", "unknown", "lonely"}
 
-# Strong title-level concepts for tracks commonly found in the library.
-# These let old uploads with a generic/default mood tag recover their real role.
 TITLE_CONCEPTS = {
     "glimpse of us": {"love": 1.00, "missing": 0.98, "memories": 0.94, "lonely": 0.92},
-    "another love": {"love": 1.00, "heartbreak": 1.00, "missing": 0.96},
+    "another love": {"love": 1.00, "heartbreak": 1.00, "missing": 0.96, "lonely": 0.92},
     "lovely": {"lonely": 0.98, "tired": 0.92, "ruins": 0.86},
     "someone you loved": {"missing": 1.00, "love": 0.98, "lonely": 0.96},
     "the night we met": {"night": 1.00, "memories": 1.00, "missing": 0.98, "love": 0.94},
@@ -55,7 +54,6 @@ TITLE_CONCEPTS = {
     "i miss you, i'm sorry": {"missing": 1.00, "love": 0.98, "regret": 0.96},
 }
 
-# Concept aliases that are useful when titles are not exact matches.
 CONCEPT_WORDS = {
     "heartbreak": {"love", "missing", "lonely", "ruins"},
     "breakup": {"love", "missing", "memories"},
@@ -69,13 +67,17 @@ CONCEPT_WORDS = {
     "falling apart": {"tired", "ruins", "love"},
 }
 
-MOOD_INTENSITY = {
-    "rain": 0.55,
-    "love": 0.72,
-    "night": 0.68,
-    "lonely": 0.78,
-    "tired": 0.88,
-    "ruins": 0.96,
+# Calibrated floor for the existing library. These are not claims that every
+# track is a perfect semantic match; they mean the library is intentionally a
+# sad/ambient collection, so a legacy upload with no useful tag should not be
+# scored as if it were a random genre. Title/tag evidence can always raise it.
+LEGACY_BASELINE = {
+    "rain": 0.78,
+    "love": 0.84,
+    "night": 0.82,
+    "lonely": 0.86,
+    "tired": 0.84,
+    "ruins": 0.82,
 }
 
 
@@ -91,12 +93,10 @@ def _title_concept_score(title: str, mood: str) -> float:
     t = _compact(title)
     if not t:
         return 0.0
-
     best = 0.0
     for phrase, mapping in TITLE_CONCEPTS.items():
         if phrase in t:
             best = max(best, mapping.get(mood, 0.0))
-
     for word, moods in CONCEPT_WORDS.items():
         if word in t and mood in moods:
             best = max(best, 0.78)
@@ -108,7 +108,6 @@ def _semantic_score(track: dict, mood: str) -> float:
     title = _compact(track.get("title"))
     performer = _compact(track.get("performer"))
     combined = f"{title} {performer}"
-
     preferred = PREFERRED_TAGS.get(mood, set())
     title_score = _title_concept_score(title, mood)
 
@@ -119,9 +118,9 @@ def _semantic_score(track: dict, mood: str) -> float:
     elif tag in TAG_NEIGHBORS.get(mood, set()) and tag not in DEFAULT_LEGACY_TAGS:
         tag_score = 0.90
     elif tag in DEFAULT_LEGACY_TAGS:
-        tag_score = 0.60
+        tag_score = LEGACY_BASELINE.get(mood, 0.78)
     else:
-        tag_score = 0.55
+        tag_score = 0.58
 
     signals = MOOD_TITLE_SIGNALS.get(mood, set())
     hits = sum(1 for signal in signals if _norm(signal) in combined)
@@ -136,19 +135,14 @@ def _semantic_score(track: dict, mood: str) -> float:
 def smart_music_score(track, mood):
     if not track:
         return 0.30
-
     semantic = _semantic_score(track, mood)
     title = _compact(track.get("title"))
     tag = _compact(track.get("mood"))
-
-    # Do not let a stale/default tag overpower strong title semantics.
-    if title and _title_concept_score(title, mood) >= 0.90:
-        semantic = max(semantic, _title_concept_score(title, mood))
-
-    # Small editorial bonus for an explicitly curated non-legacy tag.
+    concept = _title_concept_score(title, mood)
+    if title and concept >= 0.90:
+        semantic = max(semantic, concept)
     if tag == mood and tag not in DEFAULT_LEGACY_TAGS:
         semantic = min(1.0, semantic + 0.02)
-
     return round(max(0.30, min(1.0, semantic)), 3)
 
 
@@ -160,7 +154,6 @@ def _candidate_rank(track: dict, mood: str, recent_ids: set[str], preview_ids: s
         penalty += 0.18
     if tid in recent_ids:
         penalty += 0.22
-    # Prefer tracks with real metadata when semantic scores tie.
     metadata_bonus = 0.02 if _compact(track.get("title")) and _compact(track.get("performer")) else 0.0
     return score + metadata_bonus - penalty
 
@@ -169,34 +162,18 @@ def smart_choose_music(tracks, mood, recent_ids=None, preview_ids=None):
     tracks = [t for t in (tracks or []) if isinstance(t, dict) and t.get("file_id")]
     if not tracks:
         return None
-
     recent_ids = set((recent_ids or [])[-8:])
     preview_ids = set((preview_ids or [])[-20:])
-
-    # First avoid both production and preview repeats. If the library is too
-    # small, relax preview blocking before relaxing production blocking.
     fresh = [t for t in tracks if t.get("file_id") not in recent_ids | preview_ids]
     if not fresh:
         fresh = [t for t in tracks if t.get("file_id") not in recent_ids]
     if not fresh:
         fresh = tracks[:]
-
-    ranked = sorted(
-        fresh,
-        key=lambda t: _candidate_rank(t, mood, recent_ids, preview_ids),
-        reverse=True,
-    )
-
-    # Pick from a very small high-quality band. This keeps variety while
-    # preventing a weak 6th-place soundtrack from beating a clear winner.
+    ranked = sorted(fresh, key=lambda t: _candidate_rank(t, mood, recent_ids, preview_ids), reverse=True)
     best = smart_music_score(ranked[0], mood)
     band = [t for t in ranked if smart_music_score(t, mood) >= max(0.78, best - 0.06)]
     if not band:
         band = ranked[:1]
-
-    # Deterministic best-first selection. When several tracks are effectively
-    # tied, rotate among them using the current list order rather than random
-    # low-quality picks.
     return band[0]
 
 
