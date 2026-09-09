@@ -1,1 +1,1 @@
-worker: python bot.py
+worker: python v6_image_guard.py
