@@ -140,9 +140,10 @@ def load_state():
     raw = s.get("mood_queue", [])
     q = [m for m in raw if m in ROTATION] if isinstance(raw, list) else []
     unique = list(dict.fromkeys(q))
-    # v2 queue migration: old wrapper versions could leave duplicate/reordered moods.
-    # Rebuild from the last consumed mood so the six-mood cycle is deterministic.
-    if s.get("mood_queue_version") != 2 or len(unique) != len(q) or set(unique) != set(ROTATION):
+    # A v2 queue is intentionally allowed to contain only the remaining moods.
+    # The previous check incorrectly required all six moods on every load, which
+    # reset the queue after every consumed mood and broke deterministic rotation.
+    if s.get("mood_queue_version") != 2 or len(unique) != len(q):
         history = list(s.get("recent_moods", [])) + list(s.get("preview_moods", []))
         last = next((m for m in reversed(history) if m in ROTATION), None)
         q = _next_queue_after(last)
@@ -218,372 +219,360 @@ def _pexels(query: str) -> list[dict]:
 
 
 def _photo_candidates(mood: str, state: dict) -> list[dict]:
-    recent = set(state.get("recent_images", [])[-10:])
-    queries = MOODS[mood]["queries"][:]
+    blocked = set(state.get("recent_images", [])[-12:])
+    result = []
+    seen = set(blocked)
+    queries = list(MOODS.get(mood, {}).get("visual_queries", []))
     random.shuffle(queries)
-    photos = []
-    seen = set(recent)
-    for q in queries[:3]:
-        for p in _pexels(q):
+    for query in queries[:3]:
+        for p in _pexels(query):
             src = p.get("src") or {}
-            url = src.get("large2x") or src.get("large")
+            url = src.get("large2x") or src.get("large") or src.get("original")
             if not url or url in seen:
                 continue
             seen.add(url)
-            photos.append({
-                "url": url,
-                "query": q,
-                "alt": p.get("alt", ""),
-                "luminance": _luminance(p.get("avg_color")),
-                "width": p.get("width", 0),
-                "height": p.get("height", 0),
-            })
-        if len(photos) >= 12:
-            break
-    return photos
+            p["url"] = url
+            p["alt"] = p.get("alt") or ""
+            result.append(p)
+    random.shuffle(result)
+    return result
 
 
-def _pick_photo(photos: list[dict], mood: str) -> dict | None:
-    if not photos:
+def _download_photo(url: str) -> bytes | None:
+    try:
+        r = requests.get(url, timeout=20)
+        r.raise_for_status()
+        return r.content
+    except Exception as e:
+        log.warning("Photo download failed: %s", e)
         return None
-    ranked = sorted(photos, key=lambda p: image_score(p, mood), reverse=True)
-    return random.choice(ranked[:min(5, len(ranked))])
 
 
-def _select_track(lib: dict, mood: str, state: dict, preview: bool = False):
-    return choose_music(
-        lib["tracks"],
-        mood,
-        state.get("recent_track_ids", []),
-        state.get("preview_track_ids", []) if preview else [],
-    )
+def _caption_hash(text: str) -> str:
+    return hashlib.sha1(normalize(text).encode("utf-8")).hexdigest()
 
 
-def build_package(preview=False) -> dict | None:
+def _track_key(track: dict) -> str:
+    return str(track.get("id") or track.get("file_id") or "")
+
+
+def _track_allowed(track: dict, state: dict, preview: bool) -> bool:
+    key = _track_key(track)
+    recent = state.get("preview_track_ids", []) if preview else state.get("recent_track_ids", [])
+    return key not in recent[-MUSIC_COOLDOWN:]
+
+
+def _score_package(mood: str, caption: str, track: dict | None, photo: dict | None) -> dict:
+    score = quality_score(mood, caption, track, photo)
+    return score
+
+
+def build_package(preview=False):
     state = load_state()
-    lib = load_library()
-    # Critical rule: Mood is selected exactly once per package build.
     mood = choose_mood(state)
+    library = load_library()
+    candidates = _photo_candidates(mood, state) if SEND_PHOTOS else [None]
+    if not candidates:
+        candidates = [None]
     best = None
     for _ in range(max(1, MAX_ATTEMPTS)):
-        caption = choose_caption(mood, state.get("recent_caption_hashes", []) + state.get("preview_caption_hashes", [])[-25:])
-        track = _select_track(lib, mood, state, preview=preview)
-        photos = _photo_candidates(mood, state) if SEND_PHOTOS else []
-        photo = _pick_photo(photos, mood)
-        score = quality_score(mood, caption, track, photo)
-        package = {"mood": mood, "caption": caption, "track": track, "photo": photo, "score": score}
-        if best is None or score["overall"] > best["score"]["overall"]:
-            best = package
-        if score["overall"] >= QUALITY_THRESHOLD:
+        photo = random.choice(candidates)
+        caption = choose_caption(mood, state.get("recent_caption_hashes", []) + state.get("preview_caption_hashes", []))
+        track = choose_music(mood, library.get("tracks", []), state, preview=preview)
+        if track and not _track_allowed(track, state, preview):
+            allowed = [t for t in library.get("tracks", []) if _track_allowed(t, state, preview)]
+            if allowed:
+                track = random.choice(allowed)
+        quality = _score_package(mood, caption, track, photo)
+        quality["mood"] = mood
+        quality["caption"] = caption
+        quality["track"] = track
+        quality["photo"] = photo
+        if best is None or quality.get("overall", 0) > best.get("overall", 0):
+            best = quality
+        if quality.get("overall", 0) >= QUALITY_THRESHOLD:
             break
     return best
 
 
-def _audio_caption(track: dict) -> str:
-    return f"🎧 {track.get('performer') or 'Unknown'} — {track.get('title') or 'Unknown'}\n\n{SIGNATURE}"
+def _caption_text(package: dict) -> str:
+    return f"{package['caption']}\n\n{SIGNATURE}\n\n🌗 حس این پست: {MOODS[package['mood']]['label']} {MOODS[package['mood']]['emoji']}\n⭐ کیفیت: {int(package['overall'])}/100\n📝 متن: {int(package['text'])} | 🖼 عکس: {int(package['image'])} | 🎧 آهنگ: {int(package['music'])} | 🔗 هماهنگی: {int(package['coherence'])}"
 
 
-async def send_package(context: ContextTypes.DEFAULT_TYPE, package: dict, preview=False):
-    caption = f"{package['caption']}\n\n{SIGNATURE}"
+async def _send_package(bot_app, package: dict, chat_id):
     photo = package.get("photo")
-    track = package.get("track")
-    if photo:
-        try:
-            data = requests.get(photo["url"], timeout=20).content
-            bio = io.BytesIO(data)
-            bio.name = "silentruins.jpg"
-            photo_msg = await context.bot.send_photo(CHANNEL_ID, photo=bio, caption=caption)
-        except Exception:
-            log.exception("Photo send failed")
-            photo_msg = await context.bot.send_message(CHANNEL_ID, caption=caption)
+    if photo and photo.get("url"):
+        data = _download_photo(photo["url"])
+        if data:
+            await bot_app.send_photo(chat_id=chat_id, photo=io.BytesIO(data), caption=_caption_text(package))
+        else:
+            await bot_app.send_message(chat_id=chat_id, text=_caption_text(package))
     else:
-        photo_msg = await context.bot.send_message(CHANNEL_ID, caption=caption)
-    if track:
-        await context.bot.send_audio(CHANNEL_ID, audio=track["file_id"], caption=_audio_caption(track), title=track.get("title"), performer=track.get("performer"))
-    return photo_msg
+        await bot_app.send_message(chat_id=chat_id, text=_caption_text(package))
+    track = package.get("track")
+    if track and track.get("file_id"):
+        await bot_app.send_audio(chat_id=chat_id, audio=track["file_id"], title=track.get("title"), performer=track.get("performer"))
 
 
 def commit_package(package: dict):
     state = load_state()
-    track = package.get("track")
-    photo = package.get("photo")
-    mood = package["mood"]
-    state["recent_moods"] = (state.get("recent_moods", []) + [mood])[-6:]
-    state["recent_track_ids"] = (state.get("recent_track_ids", []) + [track["file_id"] if track else ""])[-MUSIC_COOLDOWN:]
-    state["recent_images"] = (state.get("recent_images", []) + [photo["url"] if photo else ""])[-12:]
-    h = hashlib.sha256(normalize(package["caption"]).encode()).hexdigest()
-    state["recent_caption_hashes"] = (state.get("recent_caption_hashes", []) + [h])[-25:]
+    mood = package.get("mood")
     _advance_mood(state, mood)
+    state.setdefault("recent_moods", []).append(mood)
+    state["recent_moods"] = state["recent_moods"][-12:]
+    track = package.get("track")
+    if track:
+        key = _track_key(track)
+        state.setdefault("recent_track_ids", []).append(key)
+        state["recent_track_ids"] = state["recent_track_ids"][-MUSIC_COOLDOWN:]
+    caption = package.get("caption") or ""
+    state.setdefault("recent_caption_hashes", []).append(_caption_hash(caption))
+    state["recent_caption_hashes"] = state["recent_caption_hashes"][-30:]
+    photo = package.get("photo")
+    if photo and photo.get("url"):
+        state.setdefault("recent_images", []).append(photo["url"])
+        state["recent_images"] = state["recent_images"][-12:]
     state["last_post_at"] = int(time.time())
     save_state(state)
-
-    lib = load_library()
-    if track:
-        lib["unplayed"] = [x for x in lib.get("unplayed", []) if x != track["file_id"]]
-        if not lib["unplayed"]:
-            lib["unplayed"] = [t["file_id"] for t in lib["tracks"] if t["file_id"] not in state["recent_track_ids"]] or [t["file_id"] for t in lib["tracks"]]
-        save_library(lib)
-        DB.track_played(track["file_id"])
-    DB.post_success(mood, package["caption"], track.get("file_id") if track else None, photo.get("url") if photo else None, package["score"]["overall"])
+    DB.record_post(mood, caption, _track_key(track) if track else "", photo.get("url") if photo else "", package.get("overall", 0), "success", "")
 
 
-async def post_once(context: ContextTypes.DEFAULT_TYPE, force=False):
-    if load_state().get("paused") and not force:
-        return
-    package = None
+async def post_once(app):
+    state = load_state()
+    if state.get("paused"):
+        return False
+    package = build_package(preview=False)
+    if not package or package.get("overall", 0) < QUALITY_THRESHOLD:
+        if package:
+            DB.record_post(package.get("mood", ""), package.get("caption", ""), _track_key(package.get("track")), package.get("photo", {}).get("url", "") if package.get("photo") else "", package.get("overall", 0), "failed", "quality gate")
+        return False
     try:
-        package = build_package(False)
-        if not package:
-            return
-        sc = package["score"]
-        if sc["overall"] < QUALITY_THRESHOLD:
-            log.warning("Package rejected: quality=%s", sc["overall"])
-            return
-        await send_package(context, package)
+        await _send_package(app.bot, package, CHANNEL_ID)
         commit_package(package)
-        log.info("Published mood=%s quality=%s", package["mood"], package["score"]["overall"])
+        return True
     except Exception as e:
-        log.exception("Publish failed")
-        DB.post_failed(package.get("mood") if package else None, package.get("caption", "") if package else "", e)
+        log.exception("Post failed: %s", e)
+        DB.record_post(package.get("mood", ""), package.get("caption", ""), _track_key(package.get("track")), package.get("photo", {}).get("url", "") if package.get("photo") else "", package.get("overall", 0), "failed", str(e))
+        return False
 
 
 async def preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update):
         return
-    package = build_package(True)
-    target = update.callback_query.message if getattr(update, "callback_query", None) else update.message
+    package = build_package(preview=True)
     if not package:
-        await target.reply_text("❌ این دور Preview به استاندارد لازم نرسید؛ عکس یا آهنگ ضعیف عمداً نمایش داده نمی‌شود.")
-        return
-    sc = package["score"]
-    if sc["image"] < 72 or sc["music"] < 72:
-        await target.reply_text("❌ این دور Preview به استاندارد لازم نرسید؛ عکس یا آهنگ ضعیف عمداً نمایش داده نمی‌شود.")
-        return
-
-    text = (
-        f"🌗 حس این پست: {MOODS[package['mood']]['fa']} {MOODS[package['mood']]['emoji']}\n"
-        f"⭐ کیفیت: {sc['overall']}/100\n"
-        f"📝 متن: {sc['text']} | 🖼 عکس: {sc['image']} | 🎧 آهنگ: {sc['music']} | 🔗 هماهنگی: {sc['coherence']}"
-    )
-    caption = f"{package['caption']}\n\n{SIGNATURE}\n\n{text}"
-    photo = package.get("photo")
-    try:
-        if photo:
-            data = requests.get(photo["url"], timeout=20).content
-            bio = io.BytesIO(data)
-            bio.name = "preview.jpg"
-            await target.reply_photo(photo=bio, caption=caption)
+        text = "❌ نتوانستم پکیج Preview بسازم."
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(text)
         else:
-            await target.reply_text(caption)
-        track = package.get("track")
-        if track:
-            await target.reply_audio(audio=track["file_id"], caption=_audio_caption(track), title=track.get("title"), performer=track.get("performer"))
+            await update.message.reply_text(text)
+        return
+    if package.get("overall", 0) < max(72, QUALITY_THRESHOLD - 10):
+        text = f"❌ کیفیت کافی نیست: {int(package.get('overall', 0))}/100"
+        if update.callback_query:
+            await update.callback_query.answer()
+            await update.callback_query.message.reply_text(text)
+        else:
+            await update.message.reply_text(text)
+        return
+    target = update.callback_query.message if update.callback_query else update.message
+    try:
+        await _send_package(target.get_bot() if hasattr(target, "get_bot") else context.bot, package, target.chat_id)
     except Exception:
-        log.exception("Preview send failed")
-        return
-
+        if update.callback_query:
+            await update.callback_query.answer()
+        raise
     state = load_state()
-    mood = package["mood"]
-    state["preview_moods"] = (state.get("preview_moods", []) + [mood])[-12:]
-    if package.get("track"):
-        state["preview_track_ids"] = (state.get("preview_track_ids", []) + [package["track"]["file_id"]])[-25:]
-    h = hashlib.sha256(normalize(package["caption"]).encode()).hexdigest()
-    state["preview_caption_hashes"] = (state.get("preview_caption_hashes", []) + [h])[-25:]
-    _advance_mood(state, mood)
+    _advance_mood(state, package.get("mood"))
+    state.setdefault("preview_moods", []).append(package.get("mood"))
+    state["preview_moods"] = state["preview_moods"][-30:]
+    track = package.get("track")
+    if track:
+        state.setdefault("preview_track_ids", []).append(_track_key(track))
+        state["preview_track_ids"] = state["preview_track_ids"][-MUSIC_COOLDOWN:]
+    state.setdefault("preview_caption_hashes", []).append(_caption_hash(package.get("caption", "")))
+    state["preview_caption_hashes"] = state["preview_caption_hashes"][-30:]
     save_state(state)
-
-
-async def manual_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    await post_once(context, force=True)
-    await update.message.reply_text("✅ پست ساخته و ارسال شد.")
+    if update.callback_query:
+        await update.callback_query.answer("Preview ارسال شد")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("🥀 SilentRuins v6\nبرای دریافت Preview: /preview\nبرای پنل مدیریت: /panel")
+    if is_admin(update):
+        await update.message.reply_text("🥀 SilentRuins is online. /panel")
+    else:
+        await update.message.reply_text("🥀 SilentRuins")
 
 
 async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
+    if not is_admin(update): return
     kb = [
-        [InlineKeyboardButton("👁 Preview", callback_data="preview"), InlineKeyboardButton("🚀 Post", callback_data="post")],
+        [InlineKeyboardButton("👁 Preview", callback_data="preview"), InlineKeyboardButton("📊 Stats", callback_data="stats")],
+        [InlineKeyboardButton("🎵 Songs", callback_data="songs"), InlineKeyboardButton("🕒 Schedule", callback_data="schedule")],
         [InlineKeyboardButton("⏸ Pause", callback_data="pause"), InlineKeyboardButton("▶️ Resume", callback_data="resume")],
-        [InlineKeyboardButton("📊 Stats", callback_data="stats"), InlineKeyboardButton("🎵 Songs", callback_data="songs")],
-        [InlineKeyboardButton("🕐 Schedule", callback_data="schedule"), InlineKeyboardButton("💾 Backup", callback_data="backup")],
+        [InlineKeyboardButton("💾 Backup", callback_data="backup")],
     ]
-    await update.message.reply_text("🥀 SilentRuins Control", reply_markup=InlineKeyboardMarkup(kb))
-
-
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if not is_admin(update):
-        return
-    if q.data == "preview":
-        await preview(update, context)
-    elif q.data == "post":
-        await post_once(context, True)
-        await q.message.reply_text("✅ ارسال شد")
-    elif q.data == "pause":
-        s = load_state(); s["paused"] = True; save_state(s); await q.message.reply_text("⏸ متوقف شد")
-    elif q.data == "resume":
-        s = load_state(); s["paused"] = False; save_state(s); await q.message.reply_text("▶️ ادامه پیدا کرد")
-    elif q.data == "stats":
-        await stats(update, context)
-    elif q.data == "songs":
-        await songs(update, context)
-    elif q.data == "schedule":
-        await schedule_cmd(update, context)
-    elif q.data == "backup":
-        await backup(update, context)
-
-
-async def add_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update) or not update.message or not update.message.audio:
-        return
-    a = update.message.audio
-    lib = load_library(); mood = (context.user_data.get("pending_mood") or "lonely")
-    track = {"file_id": a.file_id, "title": a.title or "Unknown", "performer": a.performer or "Unknown", "mood": mood, "added_at": int(time.time())}
-    existing = {t["file_id"] for t in lib["tracks"]}
-    if track["file_id"] not in existing:
-        lib["tracks"].append(track); lib["unplayed"].append(track["file_id"]); save_library(lib); DB.track_upsert(track)
-        await update.message.reply_text(f"🎵 اضافه شد: {track['performer']} — {track['title']}\nحس: {MOODS.get(mood,{}).get('fa',mood)}")
-    else:
-        await update.message.reply_text("ℹ️ این آهنگ قبلاً اضافه شده.")
-
-
-async def music_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    mood = (context.args[0].lower() if context.args else "lonely")
-    if mood not in MOODS:
-        mood = "lonely"
-    context.user_data["pending_mood"] = mood
-    await update.message.reply_text(f"🎵 آهنگ بعدی را بفرست. حس انتخاب‌شده: {MOODS[mood]['fa']} {MOODS[mood]['emoji']}")
-
-
-async def songs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    tracks = load_library()["tracks"]
-    if not tracks:
-        await update.message.reply_text("🎵 کتابخانه خالی است."); return
-    lines = [f"🎵 Music Library: {len(tracks)} آهنگ"] + [f"{i+1}. {t.get('performer','?')} — {t.get('title','?')} [{MOODS.get(t.get('mood'),{}).get('fa',t.get('mood'))}]" for i,t in enumerate(tracks[-50:])]
-    await update.message.reply_text("\n".join(lines))
-
-
-async def find_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    query = normalize(" ".join(context.args)); tracks = load_library()["tracks"]
-    hits = [t for t in tracks if query in normalize(f"{t.get('title')} {t.get('performer')} {t.get('mood')}")]
-    await update.message.reply_text("\n".join([f"🎵 {t.get('performer')} — {t.get('title')}" for t in hits[:20]]) or "پیدا نشد.")
-
-
-async def mood_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    if not context.args or context.args[0] not in MOODS:
-        await update.message.reply_text("حس‌ها: " + ", ".join(MOODS)); return
-    context.user_data["pending_mood"] = context.args[0]
-    await update.message.reply_text(f"حس بعدی: {MOODS[context.args[0]]['fa']}")
-
-
-async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    s = load_state(); s["paused"] = True; save_state(s); await update.message.reply_text("⏸ زمان‌بندی متوقف شد.")
-
-
-async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    s = load_state(); s["paused"] = False; save_state(s); await update.message.reply_text("▶️ زمان‌بندی فعال شد.")
+    await update.message.reply_text("🥀 SilentRuins Control Panel", reply_markup=InlineKeyboardMarkup(kb))
 
 
 async def stats(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    x = DB.summary(); await update.message.reply_text(f"📊 SilentRuins\nپست موفق: {x['posts']}\nخطا: {x['failed']}\n۲۴ ساعت اخیر: {x['today']}\nمیانگین کیفیت: {x['avg_quality']}/100\nآهنگ‌ها: {x['tracks']}")
+    if not is_admin(update): return
+    s = DB.summary()
+    await update.message.reply_text(f"📊 Posts: {s['posts']}\n❌ Failed: {s['failed']}\n📅 Today: {s['today']}\n⭐ Avg quality: {s['avg_quality']}\n🎵 Tracks: {s['tracks']}")
 
 
-async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await stats(update, context)
+async def songs(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    tracks = load_library()["tracks"]
+    await update.message.reply_text(f"🎵 Songs: {len(tracks)}")
 
 
 async def schedule_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    s = load_state(); status = "⏸ متوقف" if s.get("paused") else "▶️ فعال"
-    await update.message.reply_text(f"🕐 Schedule: {', '.join(POST_TIMES)}\n🌍 {TZ_NAME}\n{status}\nThreshold: {QUALITY_THRESHOLD}")
+    if not is_admin(update): return
+    await update.message.reply_text("🕒 " + (", ".join(POST_TIMES) if POST_TIMES else f"every {POST_INTERVAL}h"))
 
 
 async def jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    jobs = context.job_queue.jobs(); await update.message.reply_text("\n".join([f"• {j.name}" for j in jobs]) or "هیچ job فعالی نیست.")
+    if not is_admin(update): return
+    names = [j.name for j in context.job_queue.jobs()]
+    await update.message.reply_text("🕒 Jobs:\n" + ("\n".join(names) if names else "none"))
+
+
+async def pause(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    s = load_state(); s["paused"] = True; save_state(s)
+    await update.message.reply_text("⏸ Paused")
+
+
+async def resume(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    s = load_state(); s["paused"] = False; save_state(s)
+    await update.message.reply_text("▶️ Resumed")
+
+
+async def report(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    s = DB.summary()
+    await update.message.reply_text(json.dumps(s, ensure_ascii=False, indent=2))
+
+
+async def mood(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    s = load_state()
+    await update.message.reply_text(f"🌗 Next mood: {MOODS[_peek_mood(s)]['label']}\nQueue: {', '.join(s.get('mood_queue', []))}")
 
 
 async def backup(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S"); target = BACKUP_DIR / f"silentruins_{stamp}.zip"
-    lib = load_library(); state = load_state(); save_library(lib); save_state(state)
+    if not is_admin(update): return
+    stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
+    target = BACKUP_DIR / f"silentruins_{stamp}.zip"
     with zipfile.ZipFile(target, "w", zipfile.ZIP_DEFLATED) as z:
         for p in (LIBRARY_FILE, STATE_FILE, DB_FILE):
-            if p.exists(): z.write(p, p.name)
-    with target.open("rb") as f:
-        await update.message.reply_document(f, filename=target.name, caption="💾 SilentRuins backup")
+            if p.exists(): z.write(p, arcname=p.name)
+    await update.message.reply_document(document=str(target), caption="💾 Backup ready")
 
 
-async def delete_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
+async def find_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    q = normalize(" ".join(context.args)) if context.args else ""
+    tracks = load_library()["tracks"]
+    hits = [t for t in tracks if q in normalize(t.get("title", "") + " " + t.get("performer", ""))]
+    if not hits:
+        await update.message.reply_text("❌ پیدا نشد")
         return
-    if not context.args or not context.args[0].isdigit():
-        await update.message.reply_text("مثال: /del 3"); return
-    idx = int(context.args[0]) - 1; lib = load_library()
-    if idx < 0 or idx >= len(lib["tracks"]):
-        await update.message.reply_text("شماره نامعتبر."); return
-    track = lib["tracks"].pop(idx); lib["unplayed"] = [x for x in lib["unplayed"] if x != track["file_id"]]; save_library(lib); DB.track_delete(track["file_id"])
-    await update.message.reply_text(f"🗑 حذف شد: {track.get('title')}")
+    await update.message.reply_text("🎵\n" + "\n".join(f"{i+1}. {t.get('title')} — {t.get('performer')}" for i, t in enumerate(hits[:20])))
+
+
+async def del_song(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update) or not context.args: return
+    key = context.args[0]
+    lib = load_library(); before = len(lib["tracks"])
+    lib["tracks"] = [t for t in lib["tracks"] if _track_key(t) != key]
+    save_library(lib); sync_tracks()
+    await update.message.reply_text("🗑 Deleted" if len(lib["tracks"]) < before else "❌ Not found")
+
+
+async def music(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update): return
+    await songs(update, context)
+
+
+async def ingest_music(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update) or not update.message: return
+    audio = update.message.audio
+    voice = update.message.voice
+    doc = update.message.document
+    media = audio or voice or doc
+    if not media: return
+    file = await media.get_file()
+    data = await file.download_as_bytearray()
+    name = getattr(media, "file_name", None) or getattr(audio, "title", None) or "track"
+    performer = getattr(audio, "performer", None) or "Unknown"
+    mood_name = context.user_data.get("pending_mood", "lonely")
+    track_id = hashlib.sha1(f"{time.time()}:{name}".encode()).hexdigest()[:10]
+    lib = load_library()
+    track = {"id": track_id, "file_id": media.file_id, "title": name, "performer": performer, "mood": mood_name, "added_at": int(time.time())}
+    lib["tracks"].append(track)
+    save_library(lib); DB.track_upsert(track)
+    await update.message.reply_text(f"🎵 Added: {name}\nMood: {MOODS.get(mood_name, {}).get('label', mood_name)}")
+
+
+async def set_pending_mood(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not is_admin(update) or not context.args: return
+    value = context.args[0].lower()
+    if value not in ROTATION: return
+    context.user_data["pending_mood"] = value
+    await update.message.reply_text(f"🌗 Next uploaded song mood: {MOODS[value]['label']}")
 
 
 async def health(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not is_admin(update):
-        return
-    lib = load_library(); await update.message.reply_text(f"🟢 Healthy\nDATA_DIR: {DATA_DIR}\nVolume: {VOLUME_DIR or 'not detected'}\nSongs: {len(lib['tracks'])}")
+    if not is_admin(update): return
+    await update.message.reply_text(f"🟢 DATA_DIR: {DATA_DIR}\nVolume: {'YES' if VOLUME_DIR else 'NO'}\nSongs: {len(load_library()['tracks'])}")
 
 
-async def scheduled_job(context: ContextTypes.DEFAULT_TYPE):
-    await post_once(context)
+async def main_async():
+    app = Application.builder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("preview", preview))
+    app.add_handler(CommandHandler("post", lambda u,c: post_once(c.application)))
+    app.add_handler(CommandHandler("panel", panel))
+    app.add_handler(CommandHandler("pause", pause))
+    app.add_handler(CommandHandler("resume", resume))
+    app.add_handler(CommandHandler("stats", stats))
+    app.add_handler(CommandHandler("report", report))
+    app.add_handler(CommandHandler("songs", songs))
+    app.add_handler(CommandHandler("music", music))
+    app.add_handler(CommandHandler("findsong", find_song))
+    app.add_handler(CommandHandler("del", del_song))
+    app.add_handler(CommandHandler("mood", mood))
+    app.add_handler(CommandHandler("schedule", schedule_cmd))
+    app.add_handler(CommandHandler("jobs", jobs))
+    app.add_handler(CommandHandler("backup", backup))
+    app.add_handler(CommandHandler("health", health))
+    app.add_handler(CommandHandler("setmood", set_pending_mood))
+    app.add_handler(MessageHandler(filters.AUDIO | filters.VOICE | filters.Document.ALL, ingest_music))
 
+    async def scheduled(context: ContextTypes.DEFAULT_TYPE):
+        await post_once(context.application)
 
-def install_schedule(app: Application):
-    jq = app.job_queue
     if POST_INTERVAL:
-        jq.run_repeating(scheduled_job, interval=POST_INTERVAL * 3600, first=30, name="silentruins-interval")
+        app.job_queue.run_repeating(scheduled, interval=POST_INTERVAL * 3600, first=30, name="auto")
     else:
         for raw in POST_TIMES:
             try:
-                h, m = map(int, raw.split(":", 1)); jq.run_daily(scheduled_job, time=dtime(h, m, tzinfo=TZ), name=f"silentruins-{raw}")
+                hh, mm = [int(x) for x in raw.split(":")]
+                app.job_queue.run_daily(scheduled, time=dtime(hh, mm, tzinfo=TZ), name=f"auto_{raw}")
             except Exception:
-                log.warning("Bad POST_TIMES value: %s", raw)
+                log.warning("Bad POST_TIMES entry: %s", raw)
 
-
-async def post_init(app: Application):
-    sync_tracks(); install_schedule(app)
-    log.info("SilentRuins v6 online | data=%s | songs=%s | mood_queue=%s", DATA_DIR, len(load_library()["tracks"]), load_state().get("mood_queue"))
+    sync_tracks()
+    log.info("SilentRuins v6 started | data=%s | songs=%d | rotation=%s", DATA_DIR, len(load_library()["tracks"]), ROTATION)
+    await app.run_polling(close_loop=False)
 
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-    app.add_handler(CommandHandler("start", start)); app.add_handler(CommandHandler("preview", preview)); app.add_handler(CommandHandler("post", manual_post)); app.add_handler(CommandHandler("panel", panel))
-    app.add_handler(CommandHandler("pause", pause)); app.add_handler(CommandHandler("resume", resume)); app.add_handler(CommandHandler("stats", stats)); app.add_handler(CommandHandler("report", report)); app.add_handler(CommandHandler("songs", songs)); app.add_handler(CommandHandler("music", music_cmd)); app.add_handler(CommandHandler("findsong", find_song)); app.add_handler(CommandHandler("mood", mood_cmd)); app.add_handler(CommandHandler("schedule", schedule_cmd)); app.add_handler(CommandHandler("jobs", jobs)); app.add_handler(CommandHandler("backup", backup)); app.add_handler(CommandHandler("del", delete_song)); app.add_handler(CommandHandler("health", health))
-    app.add_handler(CallbackQueryHandler(callback))
-    app.add_handler(MessageHandler(filters.AUDIO, add_audio))
-    app.run_polling(drop_pending_updates=True, allowed_updates=Update.ALL_TYPES)
+    asyncio.run(main_async())
 
 
 if __name__ == "__main__":
