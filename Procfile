@@ -1,1 +1,1 @@
-worker: python bot.py
+worker: python preview_runtime.py
