@@ -1,11 +1,24 @@
-"""Railway compatibility launcher for the current SilentRuins runtime.
+"""Railway compatibility launcher for the direct v6 runtime."""
+import asyncio
+from telegram.ext import Application
+import bot
 
-This launcher intentionally starts the direct v6 bot runtime instead of the
-legacy v5.6 wrapper. Keeping one runtime prevents nested asyncio.run() calls
-and preserves the persistent mood queue.
-"""
-from v6_image_guard import main
 
+async def _run_polling_inside_existing_loop(self, *args, **kwargs):
+    await self.initialize()
+    await self.start()
+    if self.updater is None:
+        raise RuntimeError("Telegram updater is unavailable")
+    await self.updater.start_polling()
+    try:
+        await asyncio.Event().wait()
+    finally:
+        await self.updater.stop()
+        await self.stop()
+        await self.shutdown()
+
+
+Application.run_polling = _run_polling_inside_existing_loop
 
 if __name__ == "__main__":
-    main()
+    bot.main()
