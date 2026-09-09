@@ -48,6 +48,9 @@ POST_TIMES=10:00,16:00,22:00,02:00
 QUALITY_THRESHOLD=82
 MAX_CANDIDATES=8
 MUSIC_COOLDOWN_POSTS=8
+GATE_MAX_REJECTIONS=2
+GATE_EMERGENCY_FLOOR=70
+CAPTION_EMOJI=true
 ```
 
 ## Commands
@@ -70,7 +73,7 @@ MUSIC_COOLDOWN_POSTS=8
 
 ## Railway
 
-The repository uses `python bot.py` as the normal start command. `runtime_guard.py` remains only as a compatibility launcher for an older Railway custom start command.
+`python bot.py` is the single entry point — it self-loads the music/coherence intelligence layers at the end of the module. `panel_runtime.py` is kept only as a thin compatibility shim (`import bot; bot.main()`) in case the Railway start command still points at it; the result is identical either way. No other runtime files exist.
 
 Attach the existing `worker-volume` to the `worker` service with mount path `/data`. Do not create a second volume.
 

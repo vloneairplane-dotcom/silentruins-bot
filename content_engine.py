@@ -16,7 +16,8 @@ SIGNATURE = "— silent ruins 🥀"
 
 MOODS: dict[str, dict[str, Any]] = {
     "rain": {
-        "fa": "بارون", "emoji": "🌧", "visual": ["rain", "window", "wet", "street", "umbrella", "reflection"],
+        "fa": "بارون", "emoji": "🌧",
+        "emojis": ["🌧", "☔", "🖤"], "visual": ["rain", "window", "wet", "street", "umbrella", "reflection"],
         "music": ["rain", "melancholy", "missing", "memories", "emotional", "night"],
         "queries": ["rainy window lonely cinematic", "person umbrella rainy street night", "rain reflection empty street", "rain window silhouette night"],
         "captions": [
@@ -38,7 +39,8 @@ MOODS: dict[str, dict[str, Any]] = {
         ],
     },
     "night": {
-        "fa": "شب", "emoji": "🌃", "visual": ["night", "moon", "dark", "city", "silhouette", "neon", "street"],
+        "fa": "شب", "emoji": "🌃",
+        "emojis": ["🌙", "🌃", "🖤"], "visual": ["night", "moon", "dark", "city", "silhouette", "neon", "street"],
         "music": ["night", "dark", "melancholy", "loneliness", "emotional", "memories"],
         "queries": ["lonely person city night cinematic", "moon silhouette dark night", "empty road night lone figure", "woman window city night dark"],
         "captions": [
@@ -60,7 +62,8 @@ MOODS: dict[str, dict[str, Any]] = {
         ],
     },
     "lonely": {
-        "fa": "تنهایی", "emoji": "🚶", "visual": ["alone", "lonely", "silhouette", "empty", "bench", "room", "window", "distance"],
+        "fa": "تنهایی", "emoji": "🚶",
+        "emojis": ["🚶", "🌫", "🖤"], "visual": ["alone", "lonely", "silhouette", "empty", "bench", "room", "window", "distance"],
         "music": ["loneliness", "lonely", "missing", "emotional", "dark", "memories", "night"],
         "queries": ["person alone window cinematic", "lonely silhouette empty room", "single person bench fog night", "person walking alone dark street"],
         "captions": [
@@ -82,7 +85,8 @@ MOODS: dict[str, dict[str, Any]] = {
         ],
     },
     "love": {
-        "fa": "دلتنگی", "emoji": "🥀", "visual": ["rose", "letter", "photograph", "distance", "empty bed", "goodbye", "memory"],
+        "fa": "دلتنگی", "emoji": "🥀",
+        "emojis": ["🥀", "💔", "🖤"], "visual": ["rose", "letter", "photograph", "distance", "empty bed", "goodbye", "memory"],
         "music": ["heartbreak", "missing", "breakup", "regret", "romantic", "unrequited love", "betrayal", "emotional", "memories"],
         "queries": ["withered rose dark cinematic", "old photograph lonely dark room", "letter candle empty room", "person looking out window heartbreak"],
         "captions": [
@@ -104,7 +108,8 @@ MOODS: dict[str, dict[str, Any]] = {
         ],
     },
     "tired": {
-        "fa": "خستگی", "emoji": "🕯", "visual": ["tired", "eyes", "head down", "candle", "hood", "exhausted", "smoke"],
+        "fa": "خستگی", "emoji": "🕯",
+        "emojis": ["🕯", "🌫", "🖤"], "visual": ["tired", "eyes", "head down", "candle", "hood", "exhausted", "smoke"],
         "music": ["breakdown", "depression", "emotional", "loneliness", "melancholy", "regret"],
         "queries": ["tired person dark room cinematic", "head down silhouette night", "candle dark room lonely", "person sitting alone exhausted"],
         "captions": [
@@ -126,7 +131,8 @@ MOODS: dict[str, dict[str, Any]] = {
         ],
     },
     "ruins": {
-        "fa": "ویرونه", "emoji": "🏚", "visual": ["ruins", "abandoned", "fog", "old", "broken", "forest", "gothic"],
+        "fa": "ویرونه", "emoji": "🏚",
+        "emojis": ["🏚", "🍂", "🌫"], "visual": ["ruins", "abandoned", "fog", "old", "broken", "forest", "gothic"],
         "music": ["melancholy", "dark", "memories", "depression", "night", "emotional"],
         "queries": ["abandoned house fog cinematic", "old ruins moonlight dark", "misty forest abandoned place", "broken window abandoned building"],
         "captions": [
