@@ -1,0 +1,15 @@
+# فایل محرمانه — هرگز کامیت نکن
+.env
+
+# دیتای زمان اجرا
+library.json
+state.json
+
+# فایل‌های صوتی دانلودشده
+music/*
+!music/.gitkeep
+
+__pycache__/
+*.pyc
+venv/
+.venv/
