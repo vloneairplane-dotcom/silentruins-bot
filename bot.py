@@ -246,7 +246,6 @@ def _select_track(lib: dict, mood: str, state: dict, preview: bool = False):
 
 def build_package(preview=False) -> dict | None:
     state = load_state(); lib = load_library(); mood = choose_mood(state); best = None
-    # عکس‌ها فقط یک‌بار در هر build از Pexels گرفته می‌شن (نه در هر تلاش) تا سهمیه هدر نره
     photos_pool = _photo_candidates(mood, state) if SEND_PHOTOS else []
     for _ in range(max(1, MAX_ATTEMPTS)):
         caption = choose_caption(mood, state.get("recent_caption_hashes", []) + state.get("preview_caption_hashes", [])[-25:])
@@ -264,7 +263,6 @@ def _audio_caption(track: dict) -> str:
 
 
 def _final_caption(package: dict) -> str:
-    """کپشن نهایی پست: متن + ایموجی مرتبط با حس (قابل خاموش شدن با CAPTION_EMOJI=false) + امضا"""
     caption = package["caption"]
     if CAPTION_EMOJI:
         emojis = MOODS[package["mood"]].get("emojis") or [MOODS[package["mood"]]["emoji"]]
@@ -273,6 +271,7 @@ def _final_caption(package: dict) -> str:
 
 
 async def send_package(context: ContextTypes.DEFAULT_TYPE, package: dict, preview=False):
+    """Compatibility implementation; production wrapper replaces this at import."""
     caption = _final_caption(package); photo = package.get("photo"); track = package.get("track")
     if photo:
         try:
@@ -328,38 +327,24 @@ async def post_once(context: ContextTypes.DEFAULT_TYPE, force=False):
         if force or sc["overall"] >= QUALITY_THRESHOLD:
             await _commit_publish(context, package)
             return
-
-        # رد کیفیت: شمارش پیاپی + نوتیفای ادمین + fallback اضطراری (دیگه ساکت نمی‌مونیم)
         state = load_state()
         rejects = int(state.get("gate_rejects", 0)) + 1
         state["gate_rejects"] = rejects
         save_state(state)
         log.warning("Package rejected (rejects=%s): quality=%s", rejects, sc["overall"])
-
-        detail = (
-            f"🌗 {MOODS[package['mood']]['fa']} | 📝 {sc['text']} | 🖼 {sc['image']} | "
-            f"🎧 {sc['music']} | 🔗 {sc['coherence']} | ⭐ {sc['overall']}/{QUALITY_THRESHOLD}"
-        )
+        detail = (f"🌗 {MOODS[package['mood']]['fa']} | 📝 {sc['text']} | 🖼 {sc['image']} | 🎧 {sc['music']} | 🔗 {sc['coherence']} | ⭐ {sc['overall']}/{QUALITY_THRESHOLD}")
         if rejects >= GATE_MAX_REJECTIONS:
             if sc["overall"] >= GATE_EMERGENCY_FLOOR:
                 await _commit_publish(context, package)
-                await notify_admins(
-                    context,
-                    f"🆘 پست خودکار {rejects} بار پشت‌سر رد شده بود؛ این دور با کف اضطراری منتشر شد.\n{detail}\n"
-                    "برای بهتر شدن کیفیت، MP3 جدید با حس متنوع اضافه کن.",
-                )
+                await notify_admins(context, f"🆘 پست خودکار {rejects} بار پشت‌سر رد شده بود؛ این دور با کف اضطراری منتشر شد.\n{detail}\nبرای بهتر شدن کیفیت، MP3 جدید با حس متنوع اضافه کن.")
             else:
-                await notify_admins(
-                    context,
-                    f"⚠️ پست خودکار {rejects} بار پشت‌سر رد شده و این دور حتی به کف اضطراری ({GATE_EMERGENCY_FLOOR}) هم نرسید؛ چیزی منتشر نشد.\n{detail}\n"
-                    "پیشنهاد: کتابخانه‌ی آهنگ رو گسترش بده یا QUALITY_THRESHOLD رو تنظیم کن.",
-                )
+                await notify_admins(context, f"⚠️ پست خودکار {rejects} بار پشت‌سر رد شده و این دور حتی به کف اضطراری ({GATE_EMERGENCY_FLOOR}) هم نرسید؛ چیزی منتشر نشد.\n{detail}\nپیشنهاد: کتابخانه‌ی آهنگ رو گسترش بده یا QUALITY_THRESHOLD رو تنظیم کن.")
     except Exception as e:
         log.exception("Publish failed"); DB.post_failed(package.get("mood") if package else None, package.get("caption", "") if package else "", e)
 
 
 async def preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پیش‌نمایش ادمین: با تشخیص کامل، بدون ضعیف کردن استاندارد پست خودکار."""
+    """پیش‌نمایش ادمین."""
     if not is_admin(update): return
     target = update.callback_query.message if getattr(update, "callback_query", None) else update.message
     package = build_package(True)
@@ -367,48 +352,30 @@ async def preview(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await target.reply_text("❌ Preview نتوانست هیچ پکیج قابل‌بررسی بسازد."); return
     sc = package["score"]
     if sc["image"] < 68 or sc["music"] < 68 or sc["overall"] < 75:
-        await target.reply_text(
-            "⚠️ بهترین گزینه‌ی این دور هنوز ضعیف بود.\n"
-            f"🌗 حس: {MOODS[package['mood']]['fa']}\n"
-            f"📝 متن: {sc['text']} | 🖼 عکس: {sc['image']} | 🎧 آهنگ: {sc['music']} | 🔗 هماهنگی: {sc['coherence']}\n"
-            f"⭐ کلی: {sc['overall']}/100\n"
-            "این فقط Preview بود و استاندارد پست خودکار همچنان حفظه."
-        )
+        await target.reply_text("⚠️ بهترین گزینه‌ی این دور هنوز ضعیف بود.\n" f"🌗 حس: {MOODS[package['mood']]['fa']}\n" f"📝 متن: {sc['text']} | 🖼 عکس: {sc['image']} | 🎧 آهنگ: {sc['music']} | 🔗 هماهنگی: {sc['coherence']}\n" f"⭐ کلی: {sc['overall']}/100\n" "این فقط Preview بود و استاندارد پست خودکار همچنان حفظه.")
         return
-    detail = (
-        f"🌗 حس این پست: {MOODS[package['mood']]['fa']} {MOODS[package['mood']]['emoji']}\n"
-        f"⭐ کیفیت: {sc['overall']}/100\n"
-        f"📝 متن: {sc['text']} | 🖼 عکس: {sc['image']} | 🎧 آهنگ: {sc['music']} | 🔗 هماهنگی: {sc['coherence']}"
-    )
+    detail = (f"🌗 حس این پست: {MOODS[package['mood']]['fa']} {MOODS[package['mood']]['emoji']}\n" f"⭐ کیفیت: {sc['overall']}/100\n" f"📝 متن: {sc['text']} | 🖼 عکس: {sc['image']} | 🎧 آهنگ: {sc['music']} | 🔗 هماهنگی: {sc['coherence']}")
     caption = f"{_final_caption(package)}\n\n{detail}"
     photo = package.get("photo")
     try:
         if photo:
-            response = requests.get(photo["url"], timeout=20)
-            response.raise_for_status()
-            bio = io.BytesIO(response.content); bio.name = "preview.jpg"
-            await target.reply_photo(photo=bio, caption=caption)
+            response = requests.get(photo["url"], timeout=20); response.raise_for_status(); bio = io.BytesIO(response.content); bio.name = "preview.jpg"; await target.reply_photo(photo=bio, caption=caption)
         else:
             await target.reply_text(caption)
         track = package.get("track")
-        if track:
-            await target.reply_audio(audio=track["file_id"], caption=_audio_caption(track), title=track.get("title"), performer=track.get("performer"))
+        if track: await target.reply_audio(audio=track["file_id"], caption=_audio_caption(track), title=track.get("title"), performer=track.get("performer"))
     except Exception as exc:
-        log.exception("Preview send failed")
-        await target.reply_text(f"❌ ارسال Preview شکست خورد: {exc}")
-        return
+        log.exception("Preview send failed"); await target.reply_text(f"❌ ارسال Preview شکست خورد: {exc}"); return
     state = load_state(); mood = package["mood"]
     state["preview_moods"] = (state.get("preview_moods", []) + [mood])[-12:]
-    if package.get("track"):
-        state["preview_track_ids"] = (state.get("preview_track_ids", []) + [package["track"]["file_id"]])[-25:]
-    h = hashlib.sha256(normalize(package["caption"]).encode()).hexdigest()
-    state["preview_caption_hashes"] = (state.get("preview_caption_hashes", []) + [h])[-25:]
+    if package.get("track"): state["preview_track_ids"] = (state.get("preview_track_ids", []) + [package["track"]["file_id"]])[-25:]
+    h = hashlib.sha256(normalize(package["caption"]).encode()).hexdigest(); state["preview_caption_hashes"] = (state.get("preview_caption_hashes", []) + [h])[-25:]
     _advance_mood(state, mood); save_state(state)
 
 
 async def manual_post(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not is_admin(update): return
-    await post_once(context, force=True); await update.message.reply_text("✅ پست ساخته و ارسال شد.")
+    ok = await post_once(context, force=True); await update.message.reply_text("✅ پست ساخته و ارسال شد." if ok else "❌ پست ارسال نشد؛ خطا در لاگ ثبت شد.")
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE): await update.message.reply_text("🥀 SilentRuins v6\nبرای دریافت Preview: /preview\nبرای پنل مدیریت: /panel")
@@ -421,77 +388,44 @@ async def panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """پنل شیشه‌ای: همه‌ی دکمه‌ها (+ aliasهای رایج) با پیام واضح، هیچ دکمه‌ی بی‌جوابی."""
     q = update.callback_query
     if not q or not is_admin(update):
         if q: await q.answer("فقط ادمینه 🥀", show_alert=True)
         return
-    data = (q.data or "").strip().lower()
-    await q.answer()
-    target = q.message
-    action = data
+    data = (q.data or "").strip().lower(); await q.answer(); target = q.message; action = data
     for prefix in ("panel_", "menu_", "sr_"):
-        if action.startswith(prefix):
-            action = action[len(prefix):]
-            break
-    aliases = {
-        "preview_post": "preview", "preview_now": "preview",
-        "post_now": "post", "publish": "post",
-        "stop": "pause", "start": "resume",
-        "report": "stats", "statistics": "stats",
-        "music": "songs", "library": "songs",
-        "times": "schedule", "backup_now": "backup",
-    }
+        if action.startswith(prefix): action = action[len(prefix):]; break
+    aliases = {"preview_post": "preview", "preview_now": "preview", "post_now": "post", "publish": "post", "stop": "pause", "start": "resume", "report": "stats", "statistics": "stats", "music": "songs", "library": "songs", "times": "schedule", "backup_now": "backup"}
     action = aliases.get(action, action)
     try:
-        if action == "preview":
-            await preview(update, context)
+        if action == "preview": await preview(update, context)
         elif action == "post":
-            await post_once(context, True)
-            await target.reply_text("✅ دستور Post اجرا شد.")
+            ok = await post_once(context, True); await target.reply_text("✅ دستور Post اجرا شد." if ok else "❌ Post انجام نشد؛ خطا در لاگ ثبت شد.")
         elif action == "pause":
-            s = load_state(); s["paused"] = True; save_state(s)
-            await target.reply_text("⏸ زمان‌بندی متوقف شد.")
+            s = load_state(); s["paused"] = True; save_state(s); await target.reply_text("⏸ زمان‌بندی متوقف شد.")
         elif action == "resume":
-            s = load_state(); s["paused"] = False; save_state(s)
-            await target.reply_text("▶️ زمان‌بندی فعال شد.")
+            s = load_state(); s["paused"] = False; save_state(s); await target.reply_text("▶️ زمان‌بندی فعال شد.")
         elif action == "stats":
-            x = DB.summary()
-            await target.reply_text(
-                "📊 SilentRuins\n"
-                f"پست موفق: {x['posts']}\n"
-                f"خطا: {x['failed']}\n"
-                f"۲۴ ساعت اخیر: {x['today']}\n"
-                f"میانگین کیفیت: {x['avg_quality']}/100\n"
-                f"آهنگ‌ها: {x['tracks']}"
-            )
+            x = DB.summary(); await target.reply_text("📊 SilentRuins\n" f"پست موفق: {x['posts']}\n" f"خطا: {x['failed']}\n" f"۲۴ ساعت اخیر: {x['today']}\n" f"میانگین کیفیت: {x['avg_quality']}/100\n" f"آهنگ‌ها: {x['tracks']}")
         elif action == "songs":
             tracks = load_library()["tracks"]
-            if not tracks:
-                await target.reply_text("🎵 کتابخانه خالی است.")
+            if not tracks: await target.reply_text("🎵 کتابخانه خالی است.")
             else:
                 lines = [f"🎵 Music Library: {len(tracks)} آهنگ"]
                 for i, track in enumerate(tracks[-50:], 1):
-                    mood = MOODS.get(track.get("mood"), {}).get("fa", track.get("mood", "?"))
-                    lines.append(f"{i}. {track.get('performer', '?')} — {track.get('title', '?')} [{mood}]")
+                    mood = MOODS.get(track.get("mood"), {}).get("fa", track.get("mood", "?")); lines.append(f"{i}. {track.get('performer', '?')} — {track.get('title', '?')} [{mood}]")
                 await target.reply_text("\n".join(lines))
         elif action == "schedule":
-            s = load_state(); status = "⏸ متوقف" if s.get("paused") else "▶️ فعال"
-            await target.reply_text(f"🕐 Schedule: {', '.join(POST_TIMES)}\n🌍 {TZ_NAME}\n{status}\nThreshold: {QUALITY_THRESHOLD}")
+            s = load_state(); status = "⏸ متوقف" if s.get("paused") else "▶️ فعال"; await target.reply_text(f"🕐 Schedule: {', '.join(POST_TIMES)}\n🌍 {TZ_NAME}\n{status}\nThreshold: {QUALITY_THRESHOLD}")
         elif action == "backup":
-            stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S")
-            path = BACKUP_DIR / f"silentruins_{stamp}.zip"
-            save_library(load_library()); save_state(load_state())
+            stamp = datetime.now(TZ).strftime("%Y%m%d_%H%M%S"); path = BACKUP_DIR / f"silentruins_{stamp}.zip"; save_library(load_library()); save_state(load_state())
             with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as z:
                 for p in (LIBRARY_FILE, STATE_FILE, DB_FILE):
                     if p.exists(): z.write(p, p.name)
-            with path.open("rb") as f:
-                await target.reply_document(f, filename=path.name, caption="💾 SilentRuins backup")
-        else:
-            await target.reply_text(f"⚠️ دکمه ناشناخته است: {data}")
+            with path.open("rb") as f: await target.reply_document(f, filename=path.name, caption="💾 SilentRuins backup")
+        else: await target.reply_text(f"⚠️ دکمه ناشناخته است: {data}")
     except Exception as exc:
-        log.exception("Panel callback failed: %s", data)
-        await target.reply_text(f"❌ اجرای دکمه {data} با خطا مواجه شد: {exc}")
+        log.exception("Panel callback failed: %s", data); await target.reply_text(f"❌ اجرای دکمه {data} با خطا مواجه شد: {exc}")
 
 
 async def add_audio(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -597,26 +531,28 @@ async def post_init(app: Application):
 
 
 def main():
-    app=Application.builder().token(BOT_TOKEN).post_init(post_init).build()
-    app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("preview",preview)); app.add_handler(CommandHandler("post",manual_post)); app.add_handler(CommandHandler("panel",panel)); app.add_handler(CommandHandler("pause",pause)); app.add_handler(CommandHandler("resume",resume)); app.add_handler(CommandHandler("stats",stats)); app.add_handler(CommandHandler("report",report)); app.add_handler(CommandHandler("songs",songs)); app.add_handler(CommandHandler("music",music_cmd)); app.add_handler(CommandHandler("findsong",find_song)); app.add_handler(CommandHandler("mood",mood_cmd)); app.add_handler(CommandHandler("schedule",schedule_cmd)); app.add_handler(CommandHandler("jobs",jobs)); app.add_handler(CommandHandler("backup",backup)); app.add_handler(CommandHandler("del",delete_song)); app.add_handler(CommandHandler("health",health)); app.add_handler(CallbackQueryHandler(callback)); app.add_handler(MessageHandler(filters.AUDIO,add_audio))
-    app.run_polling(drop_pending_updates=True,allowed_updates=Update.ALL_TYPES)
+    app=Application.builder().token(BOT_TOKEN).post_init(post_init).build(); app.add_handler(CommandHandler("start",start)); app.add_handler(CommandHandler("preview",preview)); app.add_handler(CommandHandler("post",manual_post)); app.add_handler(CommandHandler("panel",panel)); app.add_handler(CommandHandler("pause",pause)); app.add_handler(CommandHandler("resume",resume)); app.add_handler(CommandHandler("stats",stats)); app.add_handler(CommandHandler("report",report)); app.add_handler(CommandHandler("songs",songs)); app.add_handler(CommandHandler("music",music_cmd)); app.add_handler(CommandHandler("findsong",find_song)); app.add_handler(CommandHandler("mood",mood_cmd)); app.add_handler(CommandHandler("schedule",schedule_cmd)); app.add_handler(CommandHandler("jobs",jobs)); app.add_handler(CommandHandler("backup",backup)); app.add_handler(CommandHandler("del",delete_song)); app.add_handler(CommandHandler("health",health)); app.add_handler(CallbackQueryHandler(callback)); app.add_handler(MessageHandler(filters.AUDIO,add_audio)); app.run_polling(drop_pending_updates=True,allowed_updates=Update.ALL_TYPES)
 
 
 def _apply_intelligence():
-    """لایه‌های هوش (Music/Coherence) رو مستقیم به همین ماژول وصل می‌کنه تا
-    رفتار `python bot.py` و `python panel_runtime.py` یکسان بشه."""
     global MAX_ATTEMPTS
     try:
         import music_intelligence
         import coherence_intelligence
-        music_intelligence.apply(sys.modules[__name__])
-        coherence_intelligence.apply(sys.modules[__name__])
+        music_intelligence.apply(sys.modules[__name__]); coherence_intelligence.apply(sys.modules[__name__])
         MAX_ATTEMPTS = max(MAX_ATTEMPTS, 24)
-    except Exception:
-        log.exception("Intelligence layers failed to apply")
+    except Exception: log.exception("Intelligence layers failed to apply")
 
 
 _apply_intelligence()
+
+# Runtime hardening is deliberately applied last so it wraps the final
+# intelligence-aware functions instead of being overwritten by them.
+try:
+    import production_hardening
+    production_hardening.apply(sys.modules[__name__])
+except Exception:
+    log.exception("Production hardening failed to apply")
 
 
 if __name__ == "__main__": main()
