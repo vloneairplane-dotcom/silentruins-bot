@@ -1,0 +1,8 @@
+# خروجی‌های تست و اجرا (خودکار ساخته می‌شن — تو ریپو لازم نیستن)
+debug/
+*.ppm
+tree.png
+screen.png
+clicks.jsonl
+__pycache__/
+*.pyc
